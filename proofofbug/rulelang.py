@@ -27,6 +27,18 @@ CONST_NAMES = {**{f"U{i}": 0x31 + i for i in range(8)}, **{f"A{i}": 0x99 - i for
 MAX_LEN = 1200  # a whole-system value (11 contracts) needs more than 600; still a whitelisted AST
 
 
+class WideInt(int):
+    """A constant written as wide(c): any rule value combined with it is widened first."""
+
+
+def _widen_pair(a, b):
+    if isinstance(a, WideInt) and not isinstance(b, int):
+        return a, b.wide()
+    if isinstance(b, WideInt) and not isinstance(a, int):
+        return a.wide(), b
+    return a, b
+
+
 class RuleError(ValueError):
     pass
 
@@ -82,7 +94,11 @@ def compile_rule(text: str):
         if isinstance(n, ast.UnaryOp):
             return ~ev(n.operand, tx, u)
         if isinstance(n, ast.BinOp):
-            a, b = ev(n.left, tx, u), ev(n.right, tx, u)
+            a, b = _widen_pair(ev(n.left, tx, u), ev(n.right, tx, u))
+            if isinstance(a, int) and isinstance(b, int):  # constant folding keeps "wide" marks
+                r = {ast.Add: lambda: a + b, ast.Sub: lambda: a - b, ast.Mult: lambda: a * b,
+                     ast.FloorDiv: lambda: a // b}[type(n.op)]()
+                return WideInt(r) if isinstance(a, WideInt) or isinstance(b, WideInt) else r
             if isinstance(a, int) and not isinstance(b, int):
                 if isinstance(n.op, ast.Add): return b + a
                 if isinstance(n.op, ast.Mult): return b * a
@@ -91,7 +107,8 @@ def compile_rule(text: str):
             return {ast.Add: lambda: a + b, ast.Sub: lambda: a - b, ast.Mult: lambda: a * b,
                     ast.FloorDiv: lambda: a // b}[type(n.op)]()
         if isinstance(n, ast.Compare):
-            a, b, op = ev(n.left, tx, u), ev(n.comparators[0], tx, u), type(n.ops[0])
+            a, b = _widen_pair(ev(n.left, tx, u), ev(n.comparators[0], tx, u))
+            op = type(n.ops[0])
             if isinstance(a, int) and not isinstance(b, int):  # mirror so the rule value is on the left
                 a, b = b, a
                 op = {ast.Lt: ast.Gt, ast.Gt: ast.Lt, ast.LtE: ast.GtE, ast.GtE: ast.LtE}.get(op, op)
@@ -100,8 +117,8 @@ def compile_rule(text: str):
         if isinstance(n, ast.Call):
             f = n.func.id
             args = [ev(a, tx, u) for a in n.args]
-            if f == "wide":
-                return args[0].wide()
+            if f == "wide":  # a constant becomes a wide constant: it widens what it meets
+                return WideInt(args[0]) if isinstance(args[0], int) and not isinstance(args[0], bool) else args[0].wide()
             if f == "implies":
                 return args[0].implies(args[1])
             if f in ("pre", "post", "pre_sum", "post_sum", "called") and (not args or not isinstance(args[0], str)):

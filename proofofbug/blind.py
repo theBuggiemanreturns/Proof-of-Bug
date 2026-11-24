@@ -120,21 +120,40 @@ def validate_names(case, root, rules):
     from .bench import build
     from .agent import unknown_functions
     kept, rejected = {}, []
-    for name, (text, fn) in rules.items():
+
+    def try_build(names):
+        return build(dict(case, rules={n: rules[n][1] for n in names}), True, root, 8, 1, case.get("users", 2))[0]
+
+    def check(names):
+        # One build checks a whole group; a failing group is split in halves, so the cost grows with the
+        # number of bad rules, not with the number of rules (a big system takes ~20 s per build).
+        # Same outcome as building every rule alone: rules do not affect each other's build.
         try:
-            m, _, _ = build(dict(case, rules={name: fn}), True, root, 8, 1, case.get("users", 2))
-        except KeyError as e:
-            rejected.append((name, f"names something that does not exist: {e}"))
-            continue
-        except Exception as e:  # any other problem with this one rule: reject it, never the case
-            rejected.append((name, f"cannot be evaluated: {type(e).__name__}: {e}"))
-            continue
-        bad = unknown_functions(m, text)
-        if bad:
-            rejected.append((name, f"names functions that do not exist: {', '.join(bad)}"))
-            continue
-        kept[name] = (text, fn)
-    return kept, rejected
+            m = try_build(names)
+        except Exception as e:
+            if len(names) > 1:
+                h = len(names) // 2
+                check(names[:h]); check(names[h:])
+                return
+            n = names[0]
+            if isinstance(e, KeyError):
+                rejected.append((n, f"names something that does not exist: {e}"))
+            else:  # any other problem with this one rule: reject it, never the case
+                rejected.append((n, f"cannot be evaluated: {type(e).__name__}: {e}"))
+            return
+        for n in names:
+            text, fn = rules[n]
+            bad = unknown_functions(m, text)
+            if bad:
+                rejected.append((n, f"names functions that do not exist: {', '.join(bad)}"))
+            else:
+                kept[n] = (text, fn)
+
+    if rules:
+        check(list(rules))
+    order = list(rules)
+    rejected.sort(key=lambda r: order.index(r[0]))
+    return {n: kept[n] for n in order if n in kept}, rejected
 
 
 def hunt_case(case, root, kept, invs, budget, depths, ladder, log):
