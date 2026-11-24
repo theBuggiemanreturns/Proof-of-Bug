@@ -83,8 +83,7 @@ def build(case, fixed, root, W, k, users, max_unroll=8):
             init_storage.setdefault(a, {})[s] = v
     mk = lambda kk: Model(specs, W=W, k=kk, users=users, attacker=attacker, init_storage=init_storage,
                           max_unroll=max_unroll, extra_keys=extra)
-    isolate(case, specs, mk, cfg["tag"])
-    m = mk(k)
+    m = isolate(case, specs, mk, cfg["tag"], k)
     m.excluded = {f"{con.name}.{sig}": why for con, _ in specs for sig, why in con.excluded.items()}
     m.init_trace = init
     for name, fn in case["rules"].items():
@@ -97,33 +96,39 @@ def build(case, fixed, root, W, k, users, max_unroll=8):
 _ISOLATED = {}  # case tag -> {(contract, signature): why}: probes run once per case, not per build
 
 
-def isolate(case, specs, mk, tag):
+def isolate(case, specs, mk, tag, k):
     """One function the engines cannot model must not stop every other function from being searched.
-    Build the model once; if it raises Unsupported, build it for each function alone (k=1, from the
-    deployed state) and leave out every function whose own code, or the code it calls, cannot be
-    modelled. Each one left out is recorded with its reason (Contract.excluded) and reported as a
-    coverage gap: it is not searched, and the verdict says so."""
+    Build the model the caller asked for (k transactions); when it raises Unsupported, the error names
+    the transaction's entry point that reached the instruction (symexec.switch). That function is left
+    out with its reason (Contract.excluded) and the model is built again, until it builds. Each one left
+    out is reported as a coverage gap: it is not searched, and the verdict says so.
+    The exact model the search uses is the one checked, so a function that only reaches the wall after
+    other transactions (e.g. a withdrawal after a deposit) is found too. Exclusions are kept per case,
+    so every build of the case (any k, any engine) sees the same set of functions."""
     from .symexec import Unsupported
-    if tag not in _ISOLATED:
-        found = {}
+    found = _ISOLATED.setdefault(tag, {})
+
+    def apply():
+        for con, _ in specs:
+            con.excluded = {sig: why for (n, sig), why in found.items() if n == con.name}
+
+    while True:
+        apply()
         try:
-            mk(1)
-        except Unsupported:
-            sigs = [(con, f[1]) for con, _ in specs for f in con.functions()]
-            for con, sig in sigs:
-                for c, _ in specs:
-                    c.only = set()
-                con.only = {sig}
-                try:
-                    mk(1)
-                except Unsupported as e:
-                    found[(con.name, sig)] = str(e)
-                finally:
-                    for c, _ in specs:
-                        c.only = None
-        _ISOLATED[tag] = found
-    for con, _ in specs:
-        con.excluded = {sig: why for (n, sig), why in _ISOLATED[tag].items() if n == con.name}
+            return mk(k)
+        except Unsupported as e:
+            ent = getattr(e, "entry", None)
+            if ent is None:  # not inside any transaction's function (e.g. a fallback): cannot be isolated
+                raise
+            addr, sel = ent
+            i = PRIMARY_ADDR - addr
+            if not 0 <= i < len(specs):
+                raise
+            con = specs[i][0]
+            sig = next((s for s, v in con.selectors.items() if v == sel and s not in con.excluded), None)
+            if sig is None:
+                raise
+            found[(con.name, sig)] = str(e)
 
 
 def _packed(m, a, s):

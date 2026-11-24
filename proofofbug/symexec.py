@@ -599,11 +599,18 @@ class Exec(Vals):
             cases.append((cond, case["body"]))
         snap = self.snapshot(f)
         branches = []
-        for cond, body in cases:
+        entry = isinstance(e, Selector) and self.depth == 0  # the transaction's own entry point
+        for (cond, body), case in zip(cases, st["cases"]):
             if cond == FALSE:
                 continue
             self.restore(snap)
-            self.with_pc(cond, lambda b=body: self.block(b, f))
+            try:
+                self.with_pc(cond, lambda b=body: self.block(b, f))
+            except Unsupported as ex:
+                # name the entry point that reached it, so that one function can be left out (bench.build)
+                if entry and case["value"] != "default" and getattr(ex, "entry", None) is None:
+                    ex.entry = (self.address, self.literal(case["value"]))
+                raise
             branches.append((cond, self.capture(snap)))
         if len(branches) == 1 and branches[0][0] == TRUE:
             return

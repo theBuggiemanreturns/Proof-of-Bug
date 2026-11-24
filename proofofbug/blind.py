@@ -144,7 +144,13 @@ def validate_names(case, root, rules):
         for n in names:
             text, fn = rules[n]
             bad = unknown_functions(m, text)
-            if bad:
+            left_out = {b: why for b in bad for full, why in getattr(m, "excluded", {}).items()
+                        if full.split("(")[0] == b or (full.split(".", 1)[1].split("(")[0] == b
+                                                       and full.split(".")[0] == m.contracts[0][0].name)}
+            if left_out:  # it exists, but the engines cannot model it (yet): no search could check this rule
+                rejected.append((n, "names a function left out of the model: " +
+                                 "; ".join(f"{b} ({why})" for b, why in left_out.items())))
+            elif bad:
                 rejected.append((n, f"names functions that do not exist: {', '.join(bad)}"))
             else:
                 kept[n] = (text, fn)
@@ -154,6 +160,20 @@ def validate_names(case, root, rules):
     order = list(rules)
     rejected.sort(key=lambda r: order.index(r[0]))
     return {n: kept[n] for n in order if n in kept}, rejected
+
+
+def settle(case, root, depths, log):
+    """Fix the set of modelled functions before any rule is judged: build the deepest model the search
+    will use, so every function the engines cannot model is found and left out now (bench.isolate),
+    not halfway through the search."""
+    from .bench import build, auto_bounds
+    W, users, unroll = auto_bounds(dict(case, rules={}), root, 8, 3, case.get("users", 2), log=lambda *_: None)
+    k = max(depths) if isinstance(depths, (list, tuple)) else max(int(d) for d in str(depths).split(","))
+    m, _, _ = build(dict(case, rules={}), True, root, W, k, users, unroll)
+    if m.excluded:
+        log(f"{case['id']}: {len(m.excluded)} functions left out of the model (cannot be modelled yet):")
+        for f, why in sorted(m.excluded.items()):
+            log(f"    {f}: {why}")
 
 
 def hunt_case(case, root, kept, invs, budget, depths, ladder, log):
@@ -374,6 +394,7 @@ def cmd_run(root, cases, only, budget, depths, ladder):
         rec = {"id": case["id"]}
         try:
             proposals = json.load(open(pfile))
+            settle(case, root, depths, log)
             rules, invs, rejected = materialize(proposals)
             rec["rejected"] = [list(r) for r in rejected]
             kept, rej2 = validate_names(case, root, rules)
