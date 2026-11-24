@@ -39,7 +39,7 @@ def fmt_tx(x):
 
 def build(case, fixed, root, W, k, users, max_unroll=8):
     flag = "true" if fixed else "false"
-    subst = {"fixed": flag, **{f"A{i}": f"address({hex(PRIMARY_ADDR - i)})" for i in range(8)},
+    subst = {"fixed": flag, **{f"A{i}": f"address({hex(PRIMARY_ADDR - i)})" for i in range(16)},
              **{f"U{i}": f"address({hex(SENDER_BASE + i)})" for i in range(8)}}
     specs, deploys = [], []
     import copy
@@ -57,6 +57,10 @@ def build(case, fixed, root, W, k, users, max_unroll=8):
            "bytecode": {ct["name"]: con.bytecode for ct, (con, _) in zip(case["contracts"], specs)},
            "order": case.get("order"),  # deployment order (contract indices), if not the address order
            "setup": [x.format(**subst) for x in case.get("setup", [])],  # calls made after deployment
+           # setup calls that must run right after one deployment (index -> statements), and contracts
+           # the system creates itself at their model address (e.g. a pool its factory deploys)
+           "after": {int(i): [x.format(**subst) for x in xs] for i, xs in case.get("after", {}).items()},
+           "created": [i for i, ct in enumerate(case["contracts"]) if ct.get("created")],
            "deployer": case.get("deployer", "").format(**subst) or None}  # who deploys (default: the runner)
     extra = tuple(case.get("extra_keys", ()))  # addresses the deployment uses besides users/contracts
     probe = Model(specs, W=W, k=0, users=users, attacker=attacker, max_unroll=max_unroll, extra_keys=extra)
@@ -77,14 +81,49 @@ def build(case, fixed, root, W, k, users, max_unroll=8):
     for (a, s), v in init.items():
         if v:
             init_storage.setdefault(a, {})[s] = v
-    m = Model(specs, W=W, k=k, users=users, attacker=attacker, init_storage=init_storage, max_unroll=max_unroll,
-              extra_keys=extra)
+    mk = lambda kk: Model(specs, W=W, k=kk, users=users, attacker=attacker, init_storage=init_storage,
+                          max_unroll=max_unroll, extra_keys=extra)
+    isolate(case, specs, mk, cfg["tag"])
+    m = mk(k)
+    m.excluded = {f"{con.name}.{sig}": why for con, _ in specs for sig, why in con.excluded.items()}
     m.init_trace = init
     for name, fn in case["rules"].items():
         m.add_rule(name, fn)
     too_big = {f"{hex(a)}:{s}": v for (a, s), v in init.items() if v >> W and (a, s) in probe.watch
                and not _packed(m, a, s)}
     return m, cfg, too_big
+
+
+_ISOLATED = {}  # case tag -> {(contract, signature): why}: probes run once per case, not per build
+
+
+def isolate(case, specs, mk, tag):
+    """One function the engines cannot model must not stop every other function from being searched.
+    Build the model once; if it raises Unsupported, build it for each function alone (k=1, from the
+    deployed state) and leave out every function whose own code, or the code it calls, cannot be
+    modelled. Each one left out is recorded with its reason (Contract.excluded) and reported as a
+    coverage gap: it is not searched, and the verdict says so."""
+    from .symexec import Unsupported
+    if tag not in _ISOLATED:
+        found = {}
+        try:
+            mk(1)
+        except Unsupported:
+            sigs = [(con, f[1]) for con, _ in specs for f in con.functions()]
+            for con, sig in sigs:
+                for c, _ in specs:
+                    c.only = set()
+                con.only = {sig}
+                try:
+                    mk(1)
+                except Unsupported as e:
+                    found[(con.name, sig)] = str(e)
+                finally:
+                    for c, _ in specs:
+                        c.only = None
+        _ISOLATED[tag] = found
+    for con, _ in specs:
+        con.excluded = {sig: why for (n, sig), why in _ISOLATED[tag].items() if n == con.name}
 
 
 def _packed(m, a, s):

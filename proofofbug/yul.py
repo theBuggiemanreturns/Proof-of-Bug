@@ -24,6 +24,8 @@ class Contract:
         self.selectors = selectors  # signature -> selector int
         self.payable = {f"{i['name']}({','.join(x['type'] for x in i['inputs'])})" for i in abi
                         if i.get("type") == "function" and i.get("stateMutability") == "payable"}
+        self.excluded = {}  # signature -> why the engines cannot model it (reported, never silent)
+        self.only = None  # a probe of one function: the only signature callable
         self.has_receive = any(i.get("type") in ("receive", "fallback") and i.get("stateMutability") == "payable"
                                for i in abi)
 
@@ -71,9 +73,54 @@ class Contract:
                 continue
             if not include_view and item.get("stateMutability") in ("view", "pure"):
                 continue
-            sig = f"{item['name']}({','.join(i['type'] for i in item['inputs'])})"
-            out.append((item["name"], sig, self.selectors[sig], calldata_words([i["type"] for i in item["inputs"]])))
+            types = [abi_type(i) for i in item["inputs"]]
+            sig = f"{item['name']}({','.join(types)})"
+            if sig in self.excluded or (self.only is not None and sig not in self.only):
+                continue  # left out of the model (see bench.isolate), or a single-function probe
+            out.append((item["name"], sig, self.selectors[sig], calldata_words(types)))
         return sorted(out, key=lambda f: f[1])
+
+
+def abi_type(param):
+    """The canonical ABI type of a parameter, as in the selector: a struct is its components in
+    brackets, e.g. (address,uint256)[] (the ABI JSON says only "tuple[]")."""
+    t = param["type"]
+    if t.startswith("tuple"):
+        return "(" + ",".join(abi_type(c) for c in param["components"]) + ")" + t[len("tuple"):]
+    return t
+
+
+def _split_top(inner):
+    """Split a tuple's component list at its top-level commas."""
+    out, depth, cur = [], 0, ""
+    for ch in inner:
+        if ch == "," and depth == 0:
+            out.append(cur); cur = ""
+            continue
+        depth += ch == "("
+        depth -= ch == ")"
+        cur += ch
+    return out + [cur] if cur else out
+
+
+def _static_words(t):
+    """The words of a static type (a value, a fixed array of values, a struct of static members),
+    or None if the type is dynamic."""
+    if _STATIC.match(t):
+        return [t]
+    m = re.fullmatch(r"(.+)\[(\d+)\]", t)
+    if m:
+        w = _static_words(m.group(1))
+        return None if w is None else w * int(m.group(2))
+    if t.startswith("(") and t.endswith(")"):
+        out = []
+        for c in _split_top(t[1:-1]):
+            w = _static_words(c)
+            if w is None:
+                return None
+            out += w
+        return out
+    return None
 
 
 ARRAY_MAX = 3  # a dynamic array argument holds at most this many elements (a search and proof limit, reported)
@@ -90,7 +137,10 @@ def calldata_words(types):
     heads, tails = [], []
     for t in types:
         m = re.fullmatch(r"(.+)\[(\d*)\]", t)
-        if m and _STATIC.match(m.group(1)) and m.group(2):
+        sw = _static_words(t)
+        if sw is not None:  # static: values, fixed arrays and structs of static members, inline
+            heads += sw
+        elif m and _STATIC.match(m.group(1)) and m.group(2):
             heads += [m.group(1)] * int(m.group(2))
         elif m and _STATIC.match(m.group(1)):
             heads.append(("offset", len(tails)))

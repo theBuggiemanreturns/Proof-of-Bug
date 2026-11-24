@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 import json
 import z3
 
-from .symexec import CONST_OPS, CONST_UNARY, keccak_int, mapping_slot, PANIC_SELECTOR, Unsupported, SymSlot, Selector, ETH_SLOT
+from .symexec import copy_words, CONST_OPS, CONST_UNARY, keccak_int, mapping_slot, PANIC_SELECTOR, Unsupported, SymSlot, Selector, ETH_SLOT
 
 M = 1 << 256
 HALF = 1 << 255
@@ -333,6 +333,7 @@ class ZWorld:
         self.eth_users = []
         self.attackers = set()
         self.callbacks_skipped = False  # an attacker received ETH and its callback was not explored
+        self.transient = {}  # EIP-1153 transient storage {address: {slot: value}}: empty at each transaction start
 
     def possible(self, cond, timeout_ms=3000):
         """Can cond hold, given everything known so far (value bounds and assumptions)? False only
@@ -526,8 +527,14 @@ class ZExec:
     # --- run
     def run(self):
         snap = {a: dict(s) for a, s in self.w.storage.items()}
+        tsnap = {a: dict(s) for a, s in self.w.transient.items()}
         self.block(self.code.block, ZScope())
         if self.reverted is not False:
+            for a, cur in self.w.transient.items():
+                old = tsnap.get(a, {})
+                for s in set(old) | set(cur):
+                    if old.get(s, 0) is not cur.get(s, 0):
+                        cur[s] = self.z.ite(self.reverted, old.get(s, 0), cur.get(s, 0))
             pre = self.w.pre or {}
             for a, cur in self.w.storage.items():
                 old = snap.get(a, {})
@@ -880,6 +887,33 @@ class ZExec:
                 return 0
             if not is_c(a[0]): raise Unsupported("sstore at a computed slot")
             self.storage[a[0]] = z.ite(act, a[1], self._sload(a[0]))
+            return 0
+        if name in ("tload", "tstore"):
+            if not is_c(a[0]): raise Unsupported(f"{name} at a computed slot")
+            t = self.w.transient.setdefault(self.address, {})
+            if name == "tload":
+                return t.get(a[0], 0)
+            if self.static:
+                la = self.local_active
+                self.reverted, self.halted = z.or_(self.reverted, la), z.or_(self.halted, la)
+                return 0
+            t[a[0]] = z.ite(self.active, a[1], t.get(a[0], 0))
+            return 0
+        if name == "calldatacopy":
+            dst, off, size = a
+            if not all(is_c(x) for x in (dst, off, size)):
+                raise Unsupported("calldatacopy with computed arguments")
+            words = copy_words(off, size, self.env.args, base=4)
+            for i, w_ in enumerate(words):
+                self._mstore(dst + 32 * i, w_)
+            return 0
+        if name == "mcopy":
+            dst, src, size = a
+            if not all(is_c(x) for x in (dst, src, size)) or size % 32:
+                raise Unsupported("mcopy with computed or partial-word arguments")
+            words = [self.memory.get(src + 32 * i, 0) for i in range(size // 32)]
+            for i, w_ in enumerate(words):
+                self._mstore(dst + 32 * i, w_)
             return 0
         if name in ("log0", "log1", "log2", "log3", "log4"):
             return 0  # events change no state

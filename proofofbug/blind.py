@@ -81,7 +81,7 @@ def deployment_note(case):
     """Who is where and what the deployment did: context any rule writer would have. (The frozen
     agent prompt shows contract sources but not addresses, aliases or setup.)"""
     from .model import PRIMARY_ADDR, SENDER_BASE
-    subst = {**{f"A{i}": f"A{i}" for i in range(8)}, **{f"U{i}": f"U{i}" for i in range(8)}, "fixed": "true"}
+    subst = {**{f"A{i}": f"A{i}" for i in range(16)}, **{f"U{i}": f"U{i}" for i in range(8)}, "fixed": "true"}
     lines = ["Deployment of this case (A0 is the contract under test):"]
     for i, ct in enumerate(case["contracts"]):
         nm = ct.get("alias") or ct["name"]

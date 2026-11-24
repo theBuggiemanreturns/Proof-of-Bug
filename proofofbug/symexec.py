@@ -106,6 +106,25 @@ def eth_restore(vals, world, cond, before):
             st[ETH_SLOT] = vals.mux(cond, old, st.get(ETH_SLOT, 0))
 
 
+def copy_words(off, size, words, base=4):
+    """calldatacopy over word-structured calldata (selector, then 32-byte words): the words copied
+    from byte offset `off`, `size` bytes, past the end reading 0, as on the EVM. Only word-aligned
+    copies are modelled; a final partial word is copied only when it is a known number (its bytes
+    beyond `size` are cleared, as the EVM copies exactly `size` bytes into zeroed scratch)."""
+    if size == 0:
+        return []
+    if off < base or (off - base) % 32:
+        raise Unsupported("calldatacopy at an unaligned offset")
+    first, n, rem = (off - base) // 32, (size + 31) // 32, size % 32
+    out = [words[first + i] if first + i < len(words) else 0 for i in range(n)]
+    if rem:
+        last = out[-1]
+        if not isinstance(last, int):
+            raise Unsupported("calldatacopy of a partial word with a computed value")
+        out[-1] = last >> (8 * (32 - rem)) << (8 * (32 - rem))
+    return out
+
+
 def type_bound(v):
     """2^k - 1, 2^k and the signed bounds for a Solidity integer type of k bits: comparisons with
     these are overflow/range guards. A W-bit model never reaches them, exactly as it never overflows
@@ -903,6 +922,21 @@ class Exec(Vals):
                 self.halted = c.or_(self.halted, la)
                 return 0
             t[a[0]] = self.mux(self.active, a[1], t.get(a[0], 0))
+            return 0
+        if name == "calldatacopy":
+            dst, off, size = a
+            if not all(isinstance(x, int) for x in (dst, off, size)):
+                raise Unsupported("calldatacopy with computed arguments")
+            for i, w_ in enumerate(copy_words(off, size, self.env.args, base=4)):
+                self._mstore(dst + 32 * i, w_)
+            return 0
+        if name == "mcopy":
+            dst, src, size = a
+            if not all(isinstance(x, int) for x in (dst, src, size)) or size % 32:
+                raise Unsupported("mcopy with computed or partial-word arguments")
+            words = [self.memraw.get(src + 32 * i, self.memory.get(src + 32 * i, 0)) for i in range(size // 32)]
+            for i, w_ in enumerate(words):
+                self._mstore(dst + 32 * i, w_)
             return 0
         if name in ("log0", "log1", "log2", "log3", "log4"):
             return 0  # events change no state

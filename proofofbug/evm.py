@@ -6,7 +6,7 @@ contract at the attacker's address, then runs each sequence from a clean state a
 writes one line per transaction: success, first return word, and every watched slot.
 """
 from __future__ import annotations
-import json, os, subprocess
+import json, re, os, subprocess
 
 FORGE = os.environ.get("FORGE", "forge")
 
@@ -45,6 +45,7 @@ interface Vm {{
     function toString(address) external pure returns (string memory);
     function parseBytes(string calldata) external pure returns (bytes memory);
     function store(address, bytes32, bytes32) external;
+    function setEnv(string calldata, string calldata) external;
 }}
 {attacker_src}
 contract GGRun_{tag} {{
@@ -62,12 +63,15 @@ contract GGRun_{tag} {{
 {deploys}
     }}
 
-    function snap(uint256[] memory d) internal view returns (string memory s) {{
+    // every watched value, packed into one hex field (memory grows linearly with the number of slots;
+    // joining one decimal string per value grows quadratically and runs out of memory on large systems)
+    function snap(uint256[] memory d) internal view returns (string memory) {{
+        uint256[] memory v = new uint256[](d[0]);
         for (uint256 i = 0; i < d[0]; i++) {{
             address a = address(uint160(d[1 + 2 * i]));
-            uint256 v = d[2 + 2 * i] == type(uint256).max ? a.balance : uint256(vm.load(a, bytes32(d[2 + 2 * i])));
-            s = string.concat(s, ",", vm.toString(v));
+            v[i] = d[2 + 2 * i] == type(uint256).max ? a.balance : uint256(vm.load(a, bytes32(d[2 + 2 * i])));
         }}
+        return string.concat(",x", vm.toString(abi.encodePacked(v)));
     }}
 
     function calldata_(uint256[] memory d, uint256 p) internal pure returns (uint256, bytes memory cd) {{
@@ -130,6 +134,16 @@ contract GGRun_{tag} {{
 '''
 
 
+def _values(fields):
+    """Watched values of one output line: a packed hex field ("x0x...", 32 bytes per value) or, from
+    older runners, one decimal field per value."""
+    if fields and fields[0].startswith("x"):
+        h = fields[0][1:]
+        h = h[2:] if h.startswith("0x") else h
+        return [int(h[i:i + 64], 16) for i in range(0, len(h), 64)]
+    return fields
+
+
 def run(cfg, tag, sequences, watch, chunk=40):
     """Run sequences in batches of `chunk` (one Foundry test per batch: a test has a fixed gas budget,
     and every sequence redeploys the case and snapshots every watched slot)."""
@@ -142,6 +156,36 @@ def run(cfg, tag, sequences, watch, chunk=40):
             part[0].pop("code", None)
         out += part
     return out
+
+
+_DECL = re.compile(r"^\s*(?:abstract\s+)?(?:contract|interface|library)\s+(\w+)", re.M)
+
+
+def _imports(cfg, body):
+    """Import lines for the runner. Each source is imported whole, unless two of them declare the same
+    top-level name; then each is imported by the names the runner's code uses (deployed contracts and
+    anything the setup names), so the duplicates never meet in one scope."""
+    files = list(dict.fromkeys(cfg["imports"]))
+    decls = {}
+    for p in files:
+        try:
+            decls[p] = set(_DECL.findall(open(os.path.join(cfg["root"], "test", "gg", p)).read()))
+        except OSError:
+            decls[p] = set()
+    seen, clash = set(), False
+    for p in files:
+        clash |= bool(seen & decls[p])
+        seen |= decls[p]
+    if not clash:
+        return "\n".join(f'import "{p}";' for p in files)
+    used = set(re.findall(r"\b(\w+)\b", body))
+    out, taken = [], set()
+    for p in files:
+        names = sorted((decls[p] & used) - taken)
+        taken |= set(names)
+        if names:
+            out.append(f'import {{{", ".join(names)}}} from "{p}";')
+    return "\n".join(out)
 
 
 def _run(cfg, tag, sequences, watch):
@@ -174,6 +218,16 @@ def _run(cfg, tag, sequences, watch):
     lines = []
     for i in order:
         n, a, args = cfg["deploys"][i][:3]
+        if i in cfg.get("created", ()):
+            # the system itself creates this one (e.g. a pool its factory deploys). A placing deployer in
+            # the test setup builds it from OUR creation code at its model address: both are handed over
+            # in the environment (GG_CREATED_<name>: code file, GG_AT_<name>: address)
+            code = cfg.get("bytecode", {}).get(n)
+            path = f"gg-out/code_{tag}_{n}.hex"
+            open(os.path.join(root, path), "w").write("0x" + code)
+            lines.insert(0, f'        vm.setEnv("GG_CREATED_{n}", "{path}"); vm.setEnv("GG_AT_{n}", "{a:#042x}");')
+            lines += ["        " + x for x in cfg.get("after", {}).get(i, [])]
+            continue
         code = cfg.get("bytecode", {}).get(n)
         if code:
             path = f"gg-out/code_{tag}_{n}.hex"  # per run: parallel runs and same-named contracts never share a file
@@ -183,9 +237,10 @@ def _run(cfg, tag, sequences, watch):
             creation = f"type({n}).creationCode"
         who = f"vm.prank({cfg['deployer']}); " if cfg.get("deployer") else ""
         lines.append(f"        {who}deployAt(abi.encodePacked({creation}, {args}), address({hex(a)}));")
+        lines += ["        " + x for x in cfg.get("after", {}).get(i, [])]  # setup that must run right here
     deploys = "\n".join(lines)
     codes = "\n".join(f'            vm.writeLine(OUT, string.concat("code,", vm.toString(address({hex(a)}).code)));'
-                      for n, a, _ in cfg["deploys"])
+                      for n, a, *_ in cfg["deploys"])
     for a, amount in cfg.get("eth", []):  # ETH held at the start (users' wallets, funded contracts)
         deploys += f"\n        vm.deal(address({hex(a)}), {amount});"
     for stmt in cfg.get("setup", []):  # setup calls from the case's deployment notes
@@ -196,7 +251,7 @@ def _run(cfg, tag, sequences, watch):
                f"        else GGAttacker(payable(address({hex(att)}))).ggDisarm();")
     else:
         arm = "        hookOn; hook;"
-    imports = "\n".join(f'import "{p}";' for p in dict.fromkeys(cfg["imports"]))
+    imports = _imports(cfg, deploys)
     src = RUNNER.format(tag=tag, imports=imports, deploys=deploys, arm=arm, codes=codes,
                         attacker_src=ATTACKER_SRC if att else "")
     runner = os.path.join(root, "test", "gg", f"Run_{tag}.t.sol")
@@ -215,11 +270,11 @@ def _run(cfg, tag, sequences, watch):
             codes.append(f[1])
             continue
         c, j = int(f[0]), f[1]
-        vals = {w: int(v) for w, v in zip(watch, f[5:])}
+        vals = {w: int(v) for w, v in zip(watch, _values(f[5:]))}
         if j == "init":
             traces[c]["init"] = vals
         else:
             traces[c]["txs"].append({"ok": f[2] == "1", "ret": int(f[3]), "retlen": int(f[4]), "slots": vals})
     if traces:
-        traces[0]["code"] = {a: codes[i] for i, (n, a, _) in enumerate(cfg["deploys"]) if i < len(codes)}
+        traces[0]["code"] = {d[1]: codes[i] for i, d in enumerate(cfg["deploys"]) if i < len(codes)}
     return traces
