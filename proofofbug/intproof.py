@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 import json
 import z3
 
-from .symexec import copy_words, CONST_OPS, CONST_UNARY, keccak_int, mapping_slot, PANIC_SELECTOR, Unsupported, SymSlot, Selector, ETH_SLOT
+from .symexec import CHAIN_ID, copy_words, CONST_OPS, CONST_UNARY, keccak_int, mapping_slot, PANIC_SELECTOR, Unsupported, SymSlot, Selector, ETH_SLOT
 
 M = 1 << 256
 HALF = 1 << 255
@@ -316,6 +316,8 @@ class ZEnv:
     selector_word: object = None
     timestamp: object = 0
     callvalue: object = 0
+    number: object = 1
+    origin: object = None
 
 
 class ZWorld:
@@ -823,13 +825,16 @@ class ZExec:
             return r
         if name == "callvalue": return self.env.callvalue
         if name == "timestamp": return self.env.timestamp
+        if name == "number": return self.env.number
+        if name == "chainid": return CHAIN_ID
+        if name == "origin": return self.env.origin if self.env.origin is not None else self.env.caller
         if name == "caller": return self.env.caller
         if name == "calldatasize": return self.env.calldatasize
         if name == "address": return self.address
         if name == "gas": return 10_000_000
         if name in ("selfbalance", "balance") and self.w.eth_on:
             return self.w.eth(self.address) if name == "selfbalance" else self.w.eth_of(a[0])
-        if name in ("selfbalance", "balance", "number", "chainid", "origin", "coinbase", "prevrandao",
+        if name in ("selfbalance", "balance", "coinbase", "prevrandao",
                     "difficulty", "gasprice", "basefee", "blobbasefee", "blockhash", "gaslimit", "extcodehash"):
             raise Unsupported(f"{name}() is not modelled")
         if name == "calldataload":
@@ -1010,7 +1015,8 @@ class ZExec:
                     for i in range(max(0, (insize - 4) // 32))]
             sel = self.memraw.get(inp, self.memory.get(inp, 0))
             env = ZEnv(sel >> 224 if is_c(sel) else None, args, self.address, insize, sel,
-                       timestamp=self.env.timestamp, callvalue=value)
+                       timestamp=self.env.timestamp, callvalue=value, number=self.env.number,
+                       origin=self.env.origin if self.env.origin is not None else self.env.caller)
             callee = ZExec(w, t, env, self.depth + 1, gate=go, static=static).run()
             ok = z.not_(callee.reverted)
             if pays:  # the callee's own revert does not undo the value sent before it ran
@@ -1271,10 +1277,11 @@ class Prover:
         world.assume.append(z3.Or(*[caller == u for u in m.user_addrs]))
         # any time at all: from an arbitrary state the clock is unconstrained (sound over-approximation)
         now = z.fresh("now", hi=(1 << 64) - 1)
+        blk = z.fresh("block", hi=(1 << 64) - 1)  # block number: as unconstrained as the clock
         # a payable function receives any amount the caller owns
         cv = z.fresh("callvalue") if sig in getattr(m, "payable", ()) else 0
         before = pay_in(world, caller, a, cv)
-        env = ZEnv(sel, args, caller, calldatasize=4 + 32 * len(types), timestamp=now, callvalue=cv)
+        env = ZEnv(sel, args, caller, calldatasize=4 + 32 * len(types), timestamp=now, callvalue=cv, number=blk)
         ex = ZExec(world, a, env).run()
         if before:
             world.eth_restore(ex.reverted, before)
@@ -1457,7 +1464,7 @@ class Prover:
             call = {}
             for d in mdl.decls():
                 base = d.name().split("!")[0]
-                if base.startswith("arg") or base in ("caller", "now", "callvalue"):
+                if base.startswith("arg") or base in ("caller", "now", "block", "callvalue"):
                     try:
                         call[base] = mdl[d].as_long()
                     except Exception:

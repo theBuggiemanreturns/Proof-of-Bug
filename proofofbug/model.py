@@ -139,7 +139,10 @@ class Model:
         # Foundry default); each transaction moves the clock forward by a solver-chosen step
         # (possibly 0), never backwards and never past 2^W.
         self.uses_time = any(_uses(con.code, "timestamp") for con, _ in self.contracts)
+        # block number: the same kind of clock (deployment at block 1, each transaction may move it on)
+        self.uses_number = any(_uses(con.code, "number") for con, _ in self.contracts)
         now = c.const_word(1, W)
+        blk = c.const_word(1, W)
         for i in range(k):
             fn = c.new_input(f"tx{i}.fn", fbits)
             if nf < (1 << fbits):
@@ -162,6 +165,9 @@ class Model:
                 w.hook = Hook(hon, {s: c.eq(hfn, c.const_word(j, hbits)) for j, s in enumerate(self.hook_sels)}, hargs)
             if self.uses_time:
                 now, carry = c.add(now, c.new_input(f"tx{i}.dt", W))
+                valid = c.and_(valid, c.not_(carry))
+            if self.uses_number:
+                blk, carry = c.add(blk, c.new_input(f"tx{i}.dn", W))
                 valid = c.and_(valid, c.not_(carry))
             w.transient = {a_: {} for a_ in w.transient}
             pre = {a: dict(s) for a, s in w.storage.items()}
@@ -196,7 +202,8 @@ class Model:
                     for u in self.user_addrs:
                         eth_move(self.vals, w, c.and_(cond, self.vals.eq(caller, u)), u, a, cv)
                 env = TxEnv(onehot, args, caller, calldatasize=cds,
-                            timestamp=now if self.uses_time else 1, callvalue=cv)
+                            timestamp=now if self.uses_time else 1, callvalue=cv,
+                            number=blk if self.uses_number else 1)
                 ex = Exec(w, a, env, depth=0, pc0=cond).run()
                 if before:
                     eth_restore(self.vals, w, c.and_(cond, ex.reverted), before)
@@ -341,7 +348,7 @@ class Model:
         return v
 
     def decode(self, assign):
-        seq, now = [], 1
+        seq, now, blk = [], 1, 1
         for i in range(self.k):
             a, name, sig, sel, types = self.funcs[assign[f"tx{i}.fn"]]
             tx = {"to": a, "fn": name, "sig": sig, "selector": sel,
@@ -351,6 +358,9 @@ class Model:
             if self.uses_time:
                 now += assign[f"tx{i}.dt"]
                 tx["time"] = now
+            if getattr(self, "uses_number", False):
+                blk += assign[f"tx{i}.dn"]
+                tx["block"] = blk
             if sig in self.payable:
                 tx["value"] = assign[f"tx{i}.value"]
             if self.attacker is not None and assign.get(f"tx{i}.hook_on"):

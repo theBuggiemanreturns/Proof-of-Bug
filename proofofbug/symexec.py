@@ -300,6 +300,13 @@ class TxEnv:
     selector_word: object = None
     callvalue: object = 0
     timestamp: object = 0
+    number: object = 1  # block.number: a clock like the timestamp (each transaction may advance it)
+    origin: object = None  # tx.origin: the transaction's sender (None: this frame's caller is it)
+
+
+# The chain every model and every replay runs on (Foundry's default chain id): block.chainid is this
+# constant, exactly as on the EVM that confirms each finding.
+CHAIN_ID = 31337
 
 
 @dataclass
@@ -842,6 +849,9 @@ class Exec(Vals):
         if name == "caller": return self.env.caller
         if name == "calldatasize": return self.env.calldatasize
         if name == "timestamp": return self.env.timestamp
+        if name == "number": return self.env.number
+        if name == "chainid": return CHAIN_ID
+        if name == "origin": return self.env.origin if self.env.origin is not None else self.env.caller
         if name == "address": return self.address
         if name == "gas": return 10_000_000
         if name in ("selfbalance", "balance"):
@@ -1045,7 +1055,8 @@ class Exec(Vals):
                 sel = self.memraw.get(inp, self.memory.get(inp, 0))
                 onehot = {(sel >> 224): TRUE} if isinstance(sel, int) else None
                 env = TxEnv(onehot, args, self.address, calldatasize=insize, selector_word=sel,
-                            timestamp=self.env.timestamp, callvalue=value)
+                            timestamp=self.env.timestamp, callvalue=value, number=self.env.number,
+                            origin=self.env.origin if self.env.origin is not None else self.env.caller)
                 callee = Exec(w, t, env, self.depth + 1, pc0=go, static=static).run()
                 ok = c.not_(callee.reverted)
                 if pays:
@@ -1063,7 +1074,8 @@ class Exec(Vals):
                     w.hook_fired = c.or_(w.hook_fired, fire)
                     if fire != FALSE:
                         env = TxEnv(h.fn_onehot, h.args, t, calldatasize=4 + 32 * len(h.args),
-                                    timestamp=self.env.timestamp)
+                                    timestamp=self.env.timestamp, number=self.env.number,
+                                    origin=self.env.origin if self.env.origin is not None else self.env.caller)
                         Exec(w, self.address, env, self.depth + 2, pc0=fire).run()  # its failure is ignored
             success = c.or_(success, c.and_(c.and_(cond, enough), ok))
             n = max(len(rd_words), len(words))

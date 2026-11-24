@@ -48,6 +48,8 @@ def replay_cex(m, cfg, rules, proof_details, log=print):
             now = call.get("now")
             if getattr(m, "uses_time", False) and now is not None:
                 tx["time"] = max(1, now)
+            if getattr(m, "uses_number", False) and call.get("block") is not None:
+                tx["block"] = max(1, call["block"])
             if sig in getattr(m, "payable", ()):
                 tx["value"] = call.get("callvalue", 0)
             trace = evm.run(cfg, cfg["tag"] + "_cex", [[tx]], m.watch)[0]

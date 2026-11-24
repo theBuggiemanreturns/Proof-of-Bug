@@ -57,7 +57,7 @@ class ExactSearch:
         nf = len(funcs)
         maxargs = max([len(f[4]) for f in funcs] + [0])
         cons, fires, steps = [], [], []
-        prev_now = 1
+        prev_now, prev_blk = 1, 1
         for i in range(k):
             sel = z3.Int(f"step{i}.fn")
             cons += [sel >= 0, sel < nf]
@@ -66,6 +66,9 @@ class ExactSearch:
             now = z3.Int(f"step{i}.now")
             cons += [now >= prev_now, now <= MAX_TIME]
             prev_now = now
+            blk = z3.Int(f"step{i}.block")  # block.number: the same kind of clock
+            cons += [blk >= prev_blk, blk <= MAX_TIME]
+            prev_blk = blk
             value = z3.Int(f"step{i}.value")  # wei sent with the call (payable functions only)
             cons += [value >= 0, value < (1 << 256)]
             args = []
@@ -94,7 +97,8 @@ class ExactSearch:
                 cv = value if payable else 0
                 try:
                     before = pay_in(world, caller, a, cv) if payable else {}
-                    env = ZEnv(sel_word, fargs, caller, calldatasize=4 + 32 * len(types), timestamp=now, callvalue=cv)
+                    env = ZEnv(sel_word, fargs, caller, calldatasize=4 + 32 * len(types), timestamp=now, callvalue=cv,
+                               number=blk)
                     ex = ZExec(world, a, env, gate=go).run()
                     if before:
                         world.eth_restore(ex.reverted, before)
@@ -128,7 +132,8 @@ class ExactSearch:
                         if w is not v:
                             v = z.ite(go, w, v)
                     new[ad][s] = v
-            steps.append({"sel": sel, "caller": caller, "now": now, "args": args, "txs": posts, "value": value})
+            steps.append({"sel": sel, "caller": caller, "now": now, "block": blk, "args": args, "txs": posts,
+                          "value": value})
             if not posts:
                 raise Unsupported("no function can be modelled exactly")
             for name, fn in rules.items():
@@ -165,6 +170,8 @@ class ExactSearch:
                   "contract": None if a == self.m.contracts[0][1] else next(c.name for c, ad in self.m.contracts if ad == a)}
             if getattr(self.m, "uses_time", False):
                 tx["time"] = val(st["now"])
+            if getattr(self.m, "uses_number", False):
+                tx["block"] = val(st["block"])
             if sig in getattr(self.m, "payable", ()):
                 tx["value"] = val(st["value"])
             seq.append(tx)

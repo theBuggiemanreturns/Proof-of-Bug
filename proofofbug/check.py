@@ -124,7 +124,7 @@ def random_sequences(model, n, seed=1):
         return amount()
     seqs, assigns = [], []
     for _ in range(n):
-        a, seq, now = {}, [], 1
+        a, seq, now, blk = {}, [], 1, 1
         for i in range(model.k):
             fi = rnd.randrange(len(model.funcs))
             u = rnd.randrange(model.users)
@@ -151,6 +151,10 @@ def random_sequences(model, n, seed=1):
                 dt = min(rnd.choice([0, 1, rnd.randint(0, 20), rnd.randint(0, M)]), M - now)
                 now += dt
                 a[f"tx{i}.dt"], tx["time"] = dt, now
+            if getattr(model, "uses_number", False):
+                dn = min(rnd.choice([0, 1, rnd.randint(0, 20), rnd.randint(0, M)]), M - blk)
+                blk += dn
+                a[f"tx{i}.dn"], tx["block"] = dn, blk
             seq.append(tx)
         seqs.append(seq)
         assigns.append(a)

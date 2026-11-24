@@ -31,7 +31,9 @@ pragma solidity ^0.8.20;
 
 interface Vm {{
     function prank(address) external;
+    function prank(address, address) external;  // sender and tx.origin
     function warp(uint256) external;
+    function roll(uint256) external;
     function deal(address, uint256) external;
     function load(address, bytes32) external view returns (bytes32);
     function etch(address, bytes calldata) external;
@@ -90,11 +92,13 @@ contract GGRun_{tag} {{
         bytes memory hook;
         (p, hook) = calldata_(d, p);
         vm.warp(d[p++]);
+        vm.roll(d[p++]);
         uint256 value = d[p++];
 {arm}
         if (value > sender.balance) return (p, false, "");  // not a valid transaction (the model rejects it too)
-        // under prank the value comes out of the sender's own balance (as on a real chain)
-        vm.prank(sender);
+        // under prank the value comes out of the sender's own balance (as on a real chain); the user sends
+        // the transaction itself, so it is also tx.origin
+        vm.prank(sender, sender);
         (bool ok, bytes memory r) = to.call{{value: value}}(cd);
         return (p, ok, r);
     }}
@@ -103,6 +107,7 @@ contract GGRun_{tag} {{
     function runCase(uint256[] calldata dc, uint256 p, uint256 c) external returns (uint256) {{
         uint256[] memory d = dc;
         vm.warp(1);
+        vm.roll(1);
         setup();
         if (c == 0) {{
 {codes}
@@ -206,6 +211,7 @@ def _run(cfg, tag, sequences, watch):
             h = tx.get("hook")
             d += [1, h["selector"], len(h["args"])] + list(h["args"]) if h else [0, 0, 0]
             d.append(tx.get("time", 1))
+            d.append(tx.get("block", 1))
             d.append(tx.get("value", 0))
     json.dump({"d": d}, open(os.path.join(root, "gg-out", f"{tag}.in.json"), "w"))
     out = os.path.join(root, "gg-out", f"{tag}.out.csv")

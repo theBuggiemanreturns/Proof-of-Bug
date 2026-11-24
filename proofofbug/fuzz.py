@@ -76,7 +76,7 @@ def sequences(m, n, k, seed=0):
 
     seqs = []
     for _ in range(n):
-        seq, now = [], 1
+        seq, now, blk = [], 1, 1
         for _ in range(k):
             a, name, sig, sel, types = rnd.choice(m.funcs)
             tx = {"to": a, "fn": name, "sig": sig, "selector": sel, "sender": rnd.choice(m.user_addrs),
@@ -88,6 +88,9 @@ def sequences(m, n, k, seed=0):
             if getattr(m, "uses_time", False):
                 now += rnd.choice([0, 0, 1] + times)
                 tx["time"] = min(now, (1 << 40) - 1)
+            if getattr(m, "uses_number", False):  # blocks move on like time (often by one)
+                blk += rnd.choice([0, 1, 1] + times)
+                tx["block"] = min(blk, (1 << 40) - 1)
             if sig in getattr(m, "payable", ()):
                 tx["value"] = rnd.choice([0, 1] + [v for v in vals if v < (1 << 64)])
             seq.append(tx)

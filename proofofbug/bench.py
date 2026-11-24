@@ -32,6 +32,8 @@ def fmt_tx(x):
         s += f" sending {x['value']} wei"
     if "time" in x:
         s += f" at t={x['time']}"
+    if "block" in x:
+        s += f" in block {x['block']}"
     if x.get("hook"):
         s += f" [attacker calls back {x['hook']['fn']}({', '.join(map(str, x['hook']['args']))})]"
     return s
