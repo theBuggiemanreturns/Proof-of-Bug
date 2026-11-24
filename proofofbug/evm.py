@@ -257,7 +257,11 @@ def _run(cfg, tag, sequences, watch):
     runner = os.path.join(root, "test", "gg", f"Run_{tag}.t.sol")
     open(runner, "w").write(src)
     try:
-        p = subprocess.run([FORGE, "test", "--match-contract", f"GGRun_{tag}$"], cwd=root, capture_output=True, text=True)
+        # The runner's own gas ceiling must never be the limit: one test redeploys the whole case for every
+        # sequence it replays, so its total grows with system size (an 11-contract system passed 2^30, Foundry's
+        # default). Each transaction inside still gets its gas as on the EVM; only the harness ceiling is lifted.
+        p = subprocess.run([FORGE, "test", "--match-contract", f"GGRun_{tag}$", "--gas-limit", str(2**63 - 1)],
+                           cwd=root, capture_output=True, text=True)
     finally:
         os.remove(runner)  # generated runners are one-shot; leaving them makes every later build slower
     if p.returncode != 0 or not os.path.exists(out):

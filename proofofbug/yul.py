@@ -175,17 +175,27 @@ def compile_contract(path: str, name: str, root: str = ".") -> Contract:
     stypes = {s["label"]: s["type"] for s in c["storageLayout"]["storage"]}
     types = c["storageLayout"]["types"] or {}
     sels = {k: int(v, 16) for k, v in c["evm"]["methodIdentifiers"].items()}
+    # immutables of the contract AND of every contract it inherits from (ERC4626's asset, EIP712's domain,
+    # solmate ERC20's chain id...): a parent's immutable lives in this contract's code too
     immut = {}
-    def walk(n):
+    defs = {}
+    for src in out["sources"].values():
+        for node in src["ast"]["nodes"]:
+            if node.get("nodeType") == "ContractDefinition":
+                defs[node["id"]] = node
+    def walk(n, owner):
         if isinstance(n, dict):
             if n.get("nodeType") == "VariableDeclaration" and n.get("mutability") == "immutable":
-                immut[n["name"]] = str(n["id"])
-            for v in n.values(): walk(v)
+                key = n["name"] if n["name"] not in immut else f"{owner}.{n['name']}"  # same name in two parents
+                immut[key] = str(n["id"])
+            for v in n.values(): walk(v, owner)
         elif isinstance(n, list):
-            for v in n: walk(v)
-    for node in out["sources"][path]["ast"]["nodes"]:
-        if node.get("nodeType") == "ContractDefinition" and node.get("name") == name:
-            walk(node)
+            for v in n: walk(v, owner)
+    me = next((d for d in defs.values() if d.get("name") == name and
+               any(d is x for x in out["sources"][path]["ast"]["nodes"])), None)
+    for cid in (me or {}).get("linearizedBaseContracts", []):
+        if cid in defs:
+            walk(defs[cid], defs[cid]["name"])
     k = Contract(name, deployed["code"]["block"], storage, c["abi"], sels)
     k.immutable_ids = immut  # variable name -> id used by loadimmutable
     k.bytecode = c["evm"]["bytecode"]["object"]  # creation code of exactly this compilation
