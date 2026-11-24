@@ -59,3 +59,19 @@ and no engine's approximation may silently remove work from another.
 | loop bounds from the solver | a loop with a symbolic bound counted as "may run past 64 steps" even when the code bounds it (`require(length == 2)`, R10) | each further iteration and the past-the-limit case are checked with the solver (exact engine and prover) and with SAT (bit engine, only paths still running); a limit is reported only if reachable |
 | the deployer is in the address universe | sums over accounts left out what the deployer still held (R09 `ledger` failed trivially) | the deployer is a modelled account (not controlled by the solver); its balances count |
 | a reverted call in the prover | a slot first read during a reverted call was reset to 0 in the post state | it keeps its starting value |
+
+## Correction (2026-11-24, after FREEZE v6): the post-reveal regression was measured too early
+
+The summary reported the regression after the post-reveal fixes as identical (43/44, 14/14). The
+training-set run behind "14/14" (12:03 UTC) came before the last post-reveal change, *width from the
+deployed state*. Re-run on the frozen v6 engine (bench.py hash as in FREEZE.txt v6): the full benchmark
+is unchanged (43/44, 0 wrongly proven, 0 mismatches), but the training set is **13/14**. T03 (vesting keeps
+paying after the period) is MISSED.
+
+Why: the width now comes from the deployed state (largest amount 100, so 9 bits), and T03's attack
+needs a timestamp of 513, past a 9-bit clock (511). Before the change the width was 16 and the bit-level
+search found it. The bench runner uses only the bit-level search and the prover; the exact (256-bit)
+search runs in blind rounds only. The deeper fault: "clean up to 8tx/9bit" does not say that later
+times were never reached. A coverage statement must name the clock range too. To fix (not yet done):
+the width must also cover the time the contract compares against, and the clock range must be reported
+as a limit.
