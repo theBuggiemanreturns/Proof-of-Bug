@@ -69,7 +69,7 @@ def main():
             for obj in json_objects(b):
                 if isinstance(obj, dict):
                     for k, v in obj.items():
-                        if re.fullmatch(r"[A-Z]+\d+", k) and isinstance(v, dict):
+                        if re.fullmatch(r"[A-Z][A-Z0-9_]*\d+|[A-Z][A-Z0-9]*(_[A-Z0-9]+)+", k) and isinstance(v, dict):
                             json.dump(v, open(os.path.join(out, f"{k}.json"), "w"), indent=1)
                             print(k, len(v.get("rules", [])), "rules")
     elif mode == "triage":
