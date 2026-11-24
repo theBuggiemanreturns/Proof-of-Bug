@@ -908,17 +908,24 @@ class ZExec:
             dst, off, size = a
             if not all(is_c(x) for x in (dst, off, size)):
                 raise Unsupported("calldatacopy with computed arguments")
-            words = copy_words(off, size, self.env.args, base=4)
+            words = copy_words(off, size, self.env.args, base=4, mask=lambda v, rem: v)
             for i, w_ in enumerate(words):
-                self._mstore(dst + 32 * i, w_)
+                if i == len(words) - 1 and size % 32:
+                    self._partial_store(dst + 32 * i, w_, size % 32)
+                else:
+                    self._mstore(dst + 32 * i, w_)
             return 0
         if name == "mcopy":
             dst, src, size = a
-            if not all(is_c(x) for x in (dst, src, size)) or size % 32:
-                raise Unsupported("mcopy with computed or partial-word arguments")
-            words = [self.memory.get(src + 32 * i, 0) for i in range(size // 32)]
+            if not all(is_c(x) for x in (dst, src, size)):
+                raise Unsupported("mcopy with computed arguments")
+            n = (size + 31) // 32
+            words = [self.memraw.get(src + 32 * i, self.memory.get(src + 32 * i, 0)) for i in range(n)]
             for i, w_ in enumerate(words):
-                self._mstore(dst + 32 * i, w_)
+                if i == n - 1 and size % 32:
+                    self._partial_store(dst + 32 * i, w_, size % 32)
+                else:
+                    self._mstore(dst + 32 * i, w_)
             return 0
         if name in ("log0", "log1", "log2", "log3", "log4"):
             return 0  # events change no state
@@ -970,6 +977,18 @@ class ZExec:
             st[slot] = v
             self.w.pre[self.address][slot] = v
         return st[slot]
+
+    def _partial_store(self, addr, v, rem):
+        """Write the first `rem` bytes of v at addr; the rest of that memory word keeps what it held."""
+        if isinstance(v, (SymSlot, Selector)):
+            raise Unsupported("a hashed slot copied in part")
+        z, k = self.z, 8 * (32 - rem)
+        old = self.memory.get(addr, 0)
+        if isinstance(old, SymSlot):
+            old = 0
+        hi = z.shl(k, z.shr(k, v))  # v's first rem bytes, in place
+        lo = z.sub(old, z.shl(k, z.shr(k, old)))  # old's last 32 - rem bytes
+        self._mstore(addr, (hi + lo) if is_c(hi) and is_c(lo) else z.add(hi, lo))
 
     def _mstore(self, addr, v):
         if addr == 0x40 and not is_c(v) and not isinstance(v, SymSlot):
@@ -1159,6 +1178,13 @@ class Prover:
         """model: a bit-level proofofbug.model.Model (reused for contracts, addresses, layout)."""
         self.m = model
         self.z = None
+        # every function, a function with dynamic arguments once per calldata variant (yul.length_variants,
+        # as in every engine): a rule is proven for it only when it is proven for every variant
+        from .yul import length_variants
+        self.funcs_v = []
+        for f in model.funcs:
+            lv = length_variants(f[4])
+            self.funcs_v += [f] if lv is None else [f[:4] + (vt,) for vt in lv[0]]
 
     def read(self, store, var, keys):
         if var == "ETH":
@@ -1266,7 +1292,9 @@ class Prover:
         a, name, sig, sel, types = f
         args = []
         for j, ty in enumerate(types):
-            if ty == "address":
+            if str(ty).startswith("const:"):  # a known offset or length of this calldata variant
+                v = int(ty[6:])
+            elif ty == "address":
                 v = z.fresh(f"arg{j}", hi=(1 << 160) - 1)
             elif ty == "bool":
                 v = z.fresh(f"arg{j}", hi=1)
@@ -1311,7 +1339,7 @@ class Prover:
         changed = True
         while changed and cands:
             changed = False
-            for f in self.m.funcs:
+            for f in self.funcs_v:
                 try:
                     tx, pre, post, assume, z = self.run_function(f, cands)
                 except Unsupported:
@@ -1363,7 +1391,7 @@ class Prover:
         invariants = {n: r for n, r in rules.items() if not (self.shape(r) & {"pre", "arg", "called"})}
         for r in results.values():
             r["invariants"] = [f"{self._slot_name(a, s)} == {v}" for (a, s), v in kept.items()]
-        for f in self.m.funcs:
+        for f in self.funcs_v:
             try:
                 tx, pre, post, assume, z = self.run_function(f, kept)
             except Unsupported as e:

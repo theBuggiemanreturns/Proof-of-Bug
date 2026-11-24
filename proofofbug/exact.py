@@ -19,6 +19,7 @@ from __future__ import annotations
 import z3
 from .intproof import Z, ZWorld, ZExec, ZEnv, ZTx, ZWord, Prover, zi, world_eth, pay_in
 from .symexec import Unsupported, ETH_SLOT
+from .yul import length_variants
 
 MAX_TIME = (1 << 40) - 1
 LOOP_LIMIT = 64
@@ -79,45 +80,61 @@ class ExactSearch:
                 args.append(v)
             posts = []
             for j, (a, name, sig, sel_word, types) in enumerate(funcs):
-                go = sel == j
-                fargs = []
-                for t, v in zip(types, args):  # the ABI decoder rejects out-of-range inputs; keep them valid
-                    if t == "address":
-                        cons.append(z3.Implies(go, v < (1 << 160)))
-                    elif t == "bool":
-                        cons.append(z3.Implies(go, v <= 1))
-                    elif t.startswith("uint") and t != "uint256":
-                        cons.append(z3.Implies(go, v < (1 << int(t[4:]))))
-                    fargs.append(v)
-                storage = {ad: dict(s) for ad, s in state.items()}
-                world = ZWorld(z, m.world.codes, storage, m.key_universe, max_unroll=LOOP_LIMIT)
-                world.bounded_loops = True  # search mode: paths where a loop ends within LOOP_LIMIT steps
-                world_eth(world, m)
-                payable = sig in getattr(m, "payable", ())
-                cv = value if payable else 0
-                try:
-                    before = pay_in(world, caller, a, cv) if payable else {}
-                    env = ZEnv(sel_word, fargs, caller, calldatasize=4 + 32 * len(types), timestamp=now, callvalue=cv,
-                               number=blk)
-                    ex = ZExec(world, a, env, gate=go).run()
-                    if before:
-                        world.eth_restore(ex.reverted, before)
-                    if world.callbacks_skipped:
-                        self.excluded.setdefault(f"{a:#x}.{name}", "sends ETH to the attacker contract: its callback is "
-                                                 "explored by the bit-level search only")
-                except Unsupported as e:
-                    # this function cannot be modelled exactly: the search does without it (reported)
-                    self.excluded.setdefault(f"{a:#x}.{name}", str(e))
-                    cons.append(z3.Not(go))
-                    continue
-                cons += [z3.Implies(go, x) for x in world.assume if x is not True]
-                if world.loops_cut:
-                    self.loops_cut.add(f"{name} (loops cut at {LOOP_LIMIT} iterations)")
-                ret = ex.ret_words[0] if ex.ret_words else 0
-                cname = next(c.name for c, ad in m.contracts if ad == a)
-                tx = ZTx(prover, name, cname, fargs, caller, ret, ex.reverted, state, storage)
-                tx._now = ZWord(now)
-                posts.append((go, storage, tx))
+                # a function with dynamic arguments runs once per calldata variant (yul.length_variants, as in
+                # every engine): its offset and length inputs are pinned to that variant's known numbers
+                lv = length_variants(types)
+                vlist = lv[0] if lv else [list(types)]
+                vgos = []
+                for vt in vlist:
+                    g = sel == j
+                    for p_, t_ in enumerate(vt):
+                        if t_.startswith("const:"):
+                            g = z3.And(g, args[p_] == int(t_[6:]))
+                    vgos.append(g)
+                if lv:
+                    cons.append(z3.Implies(sel == j, z3.Or(*vgos)))
+                for vt, go in zip(vlist, vgos):
+                    fargs = []
+                    for t, v in zip(vt, args):  # the ABI decoder rejects out-of-range inputs; keep them valid
+                        if t.startswith("const:"):
+                            fargs.append(int(t[6:]))
+                            continue
+                        if t == "address":
+                            cons.append(z3.Implies(go, v < (1 << 160)))
+                        elif t == "bool":
+                            cons.append(z3.Implies(go, v <= 1))
+                        elif t.startswith("uint") and t != "uint256":
+                            cons.append(z3.Implies(go, v < (1 << int(t[4:]))))
+                        fargs.append(v)
+                    storage = {ad: dict(s) for ad, s in state.items()}
+                    world = ZWorld(z, m.world.codes, storage, m.key_universe, max_unroll=LOOP_LIMIT)
+                    world.bounded_loops = True  # search mode: paths where a loop ends within LOOP_LIMIT steps
+                    world_eth(world, m)
+                    payable = sig in getattr(m, "payable", ())
+                    cv = value if payable else 0
+                    try:
+                        before = pay_in(world, caller, a, cv) if payable else {}
+                        env = ZEnv(sel_word, fargs, caller, calldatasize=4 + 32 * len(types), timestamp=now, callvalue=cv,
+                                   number=blk)
+                        ex = ZExec(world, a, env, gate=go).run()
+                        if before:
+                            world.eth_restore(ex.reverted, before)
+                        if world.callbacks_skipped:
+                            self.excluded.setdefault(f"{a:#x}.{name}", "sends ETH to the attacker contract: its callback is "
+                                                     "explored by the bit-level search only")
+                    except Unsupported as e:
+                        # this function cannot be modelled exactly: the search does without it (reported)
+                        self.excluded.setdefault(f"{a:#x}.{name}", str(e))
+                        cons.append(z3.Not(go))
+                        continue
+                    cons += [z3.Implies(go, x) for x in world.assume if x is not True]
+                    if world.loops_cut:
+                        self.loops_cut.add(f"{name} (loops cut at {LOOP_LIMIT} iterations)")
+                    ret = ex.ret_words[0] if ex.ret_words else 0
+                    cname = next(c.name for c, ad in m.contracts if ad == a)
+                    tx = ZTx(prover, name, cname, fargs, caller, ret, ex.reverted, state, storage)
+                    tx._now = ZWord(now)
+                    posts.append((go, storage, tx))
             # the state after step i: the chosen function's result
             new = {}
             for ad in state:

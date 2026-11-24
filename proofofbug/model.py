@@ -348,54 +348,33 @@ class Model:
     def nargs_of(self, sel):
         return next(len(f[4]) for f in self.funcs if f[3] == sel)
 
-    VARIANTS_MAX = 64  # most length combinations one function is run with (fewer lengths beyond: reported)
-    # which lengths to give up first when a function has too many combinations (most common kept)
-    _KEEP_ORDER = {"length": (1, 0, 2, 3), "blength": (36, 0, 4, 68, 32)}
-
     def _call_words(self, f, args, his):
-        """The calldata of a call whose arguments include dynamic types (see yul.calldata_words), as
-        variants [(condition, words)]: one per combination of the lengths it is sent with, each with every
-        offset and length a known number (the function body then runs once per variant, as separate
-        branches, so nothing downstream is a computed size). Raw bytes words are the low W bits and the
-        top 4 bytes. `ok` says the inputs are one of the variants. None if no argument is dynamic."""
-        import itertools
-        types = f[4]
-        if not any(str(t).startswith(("offset:", "length:", "blength:")) or t == "raw" for t in types):
+        """The calldata of a call whose arguments include dynamic types, as variants [(condition, words)]
+        (yul.length_variants, the same for every engine): one per combination of the lengths it is sent
+        with, every offset and length a known number, so the function body runs once per variant as
+        separate branches and nothing downstream is a computed size. Raw bytes words are the low W bits and
+        the top 4 bytes. `ok` says the inputs are one of the variants. None if no argument is dynamic."""
+        from .yul import length_variants
+        lv = length_variants(f[4])
+        if lv is None:
             return None, TRUE
-        c = self.c
-        slots = []  # (position, allowed lengths)
-        for j, t in enumerate(types):
-            t = str(t)
-            if t.startswith("length:"):
-                slots.append((j, "length", list(range(int(t[7:]) + 1))))
-            elif t.startswith("blength:"):
-                slots.append((j, "blength", [int(x) for x in t[8:].split(",")]))
-        n = 1
-        for _, _, vs in slots:
-            n *= len(vs)
-        while n > self.VARIANTS_MAX:  # give up the least common length of the slot with the most
-            j, kind, vs = max(slots, key=lambda s: len(s[2]))
-            order = [v for v in self._KEEP_ORDER[kind] if v in vs] + [v for v in vs if v not in self._KEEP_ORDER[kind]]
-            vs.remove(order[-1])
-            n = n // (len(vs) + 1) * len(vs)
-            self.length_cuts.add(f"{f[2]}: argument lengths limited to {sorted(vs)}")
-        base = []
-        for j, t in enumerate(types):
-            t = str(t)
-            if t.startswith("offset:"):
-                base.append(int(t[7:]))
-            elif t == "raw":
-                d = {p: b for p, b in enumerate(args[j]) if b != FALSE}
-                d.update({224 + q: b for q, b in enumerate(his[j]) if b != FALSE})
-                base.append(self.vals.norm(d))
-            else:
-                base.append(args[j])
-        variants = []
-        for pick in itertools.product(*[vs for _, _, vs in slots]):
-            words, cond = list(base), TRUE
-            for (j, _, _), v in zip(slots, pick):
-                words[j] = v
-                cond = c.and_(cond, self.vals.eq(args[j], v))
+        vts, slots, note = lv
+        if note:
+            self.length_cuts.add(f"{f[2]}: {note}")
+        c, variants = self.c, []
+        for vt in vts:
+            words, cond = [], TRUE
+            for j, t in enumerate(vt):
+                if t.startswith("const:"):
+                    words.append(int(t[6:]))
+                    if j in slots:
+                        cond = c.and_(cond, self.vals.eq(args[j], int(t[6:])))
+                elif t == "raw":
+                    d = {p: b for p, b in enumerate(args[j]) if b != FALSE}
+                    d.update({224 + q: b for q, b in enumerate(his[j]) if b != FALSE})
+                    words.append(self.vals.norm(d))
+                else:
+                    words.append(args[j])
             variants.append((cond, words))
         return variants, c.any_([cc for cc, _ in variants])
 

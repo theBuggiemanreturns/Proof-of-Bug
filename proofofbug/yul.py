@@ -163,6 +163,45 @@ def _block(types):
     return [f"offset:{32 * (nh + h[1])}" if isinstance(h, tuple) else h for h in heads] + tails
 
 
+VARIANTS_MAX = 64  # most length combinations one function is run with (fewer lengths beyond: reported)
+# which lengths to give up first when a function has too many combinations (most common kept)
+_KEEP_ORDER = {"length": (1, 0, 2, 3), "blength": (36, 0, 4, 68, 32)}
+
+
+def length_variants(types, max_variants=VARIANTS_MAX):
+    """The calldata variants every engine runs a function with: one word-type list per combination of its
+    argument lengths, in which every offset and every length is a known number ("const:N"); raw bytes stay
+    "raw". Returns (variants, slots, note): slots are the positions of the lengths; note says which lengths
+    were given up to stay within max_variants (None if none). None if no argument is dynamic."""
+    import itertools
+    types = [str(t) for t in types]
+    if not any(t.startswith(("offset:", "length:", "blength:")) for t in types):
+        return None
+    slots = []
+    for j, t in enumerate(types):
+        if t.startswith("length:"):
+            slots.append((j, "length", list(range(int(t[7:]) + 1))))
+        elif t.startswith("blength:"):
+            slots.append((j, "blength", [int(x) for x in t[8:].split(",")]))
+    n, note = 1, None
+    for _, _, vs in slots:
+        n *= len(vs)
+    while n > max_variants:  # give up the least common length of the slot with the most
+        j, kind, vs = max(slots, key=lambda s: len(s[2]))
+        order = [v for v in _KEEP_ORDER[kind] if v in vs] + [v for v in vs if v not in _KEEP_ORDER[kind]]
+        vs.remove(order[-1])
+        n = n // (len(vs) + 1) * len(vs)
+        note = "argument lengths limited to " + "; ".join(f"word {j}: {sorted(v)}" for j, _, v in slots)
+    base = [f"const:{t[7:]}" if t.startswith("offset:") else t for t in types]
+    out = []
+    for pick in itertools.product(*[vs for _, _, vs in slots]):
+        vt = list(base)
+        for (j, _, _), v in zip(slots, pick):
+            vt[j] = f"const:{v}"
+        out.append(vt)
+    return out, [j for j, _, _ in slots], note
+
+
 def calldata_words(types):
     """The calldata words (after the selector) of a call with these ABI parameter types, as word types.
     Static values take one word each; fixed arrays and structs of static members are inline. Every dynamic
