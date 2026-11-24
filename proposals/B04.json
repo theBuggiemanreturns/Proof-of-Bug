@@ -1,0 +1,96 @@
+{
+ "rules": [
+  {
+   "name": "auth_mint",
+   "family": "authorized_increase",
+   "params": {
+    "amount": "totalSupply",
+    "admin": "pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "only the owner can create supply"
+  },
+  {
+   "name": "ledger",
+   "family": "ledger",
+   "params": {
+    "accounts": "balanceOf",
+    "total": "totalSupply"
+   },
+   "expr": "",
+   "why": "balances add up to supply"
+  },
+  {
+   "name": "mint_supply",
+   "family": "exact_effect",
+   "params": {
+    "fn": "mint",
+    "value": "post(\"totalSupply\")",
+    "before": "pre(\"totalSupply\")",
+    "delta": "arg(1)"
+   },
+   "expr": "",
+   "why": "mint adds exactly the amount"
+  },
+  {
+   "name": "mint_to",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"mint\") and ok and post(\"balanceOf\", arg(0)) != pre(\"balanceOf\", arg(0)) + arg(1)",
+   "why": "minted tokens land with the receiver"
+  },
+  {
+   "name": "xfer_supply",
+   "family": "no_side_effect",
+   "params": {
+    "fn": "transfer",
+    "value": "post(\"totalSupply\")",
+    "before": "pre(\"totalSupply\")"
+   },
+   "expr": "",
+   "why": "transfers never change supply"
+  },
+  {
+   "name": "xfer_from",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"transfer\") and ok and arg(0) != sender and post(\"balanceOf\", sender) + arg(1) != pre(\"balanceOf\", sender)",
+   "why": "sender pays exactly"
+  },
+  {
+   "name": "xfer_to",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"transfer\") and ok and arg(0) != sender and post(\"balanceOf\", arg(0)) != pre(\"balanceOf\", arg(0)) + arg(1)",
+   "why": "receiver gets exactly"
+  },
+  {
+   "name": "owner_fixed",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and post(\"owner\") != pre(\"owner\")",
+   "why": "nobody changes the owner"
+  },
+  {
+   "name": "xfer_works",
+   "family": "must_succeed",
+   "params": {
+    "fn": "transfer",
+    "condition": "arg(1) <= pre(\"balanceOf\", sender)"
+   },
+   "expr": "",
+   "why": "you can always send what you have"
+  },
+  {
+   "name": "mint_works",
+   "family": "must_succeed",
+   "params": {
+    "fn": "mint",
+    "condition": "sender == pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "the owner can always mint"
+  }
+ ],
+ "invariants": []
+}

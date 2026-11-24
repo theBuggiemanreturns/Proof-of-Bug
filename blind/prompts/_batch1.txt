@@ -1,0 +1,809 @@
+BATCH 1 of 3: cases C01, C02, C03, C04, C05. Reply with one JSON object keyed by these case ids (see your instructions).
+
+STANDARD TOKEN (every contract named TokenCnn / TokenCnn_XXX in these cases is exactly this code, renamed):
+```solidity
+contract TokenCxx {
+    string public name;
+    string public symbol;
+    uint8 public constant decimals = 18;
+    uint256 public totalSupply;
+    address public immutable minter;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+
+    constructor(string memory _name, string memory _symbol) {
+        name = _name;
+        symbol = _symbol;
+        minter = msg.sender;
+    }
+
+    function mint(address to, uint256 amount) external {
+        require(msg.sender == minter, "minter");
+        totalSupply += amount;
+        balanceOf[to] += amount;
+        emit Transfer(address(0), to, amount);
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        _transfer(msg.sender, to, amount);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        uint256 allowed = allowance[from][msg.sender];
+        if (allowed != type(uint256).max) {
+            require(allowed >= amount, "allowance");
+            allowance[from][msg.sender] = allowed - amount;
+        }
+        _transfer(from, to, amount);
+        return true;
+    }
+
+    function _transfer(address from, address to, uint256 amount) internal {
+        require(balanceOf[from] >= amount, "balance");
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        emit Transfer(from, to, amount);
+    }
+}
+```
+
+=================== CASE C01 ===================
+Contracts (the first is the one under test):
+### VaultC01
+storage: totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), deposit(uint256,address), redeem(uint256,address,address), transfer(address,uint256)
+```solidity
+contract VaultC01 {
+    TokenC01 public immutable asset;
+
+    string public constant name = "WD Vault Share";
+    string public constant symbol = "vWD";
+    uint8 public constant decimals = 18;
+
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+    event Deposit(address indexed caller, address indexed receiver, uint256 assets, uint256 shares);
+    event Withdraw(address indexed caller, address indexed receiver, address indexed owner, uint256 assets, uint256 shares);
+
+    constructor(TokenC01 _asset) {
+        asset = _asset;
+    }
+
+    function totalAssets() public view returns (uint256) {
+        return asset.balanceOf(address(this));
+    }
+
+    function convertToShares(uint256 assets) public view returns (uint256) {
+        uint256 supply = totalSupply;
+        return supply == 0 ? assets : (assets * supply) / totalAssets();
+    }
+
+    function convertToAssets(uint256 shares) public view returns (uint256) {
+        uint256 supply = totalSupply;
+        return supply == 0 ? shares : (shares * totalAssets()) / supply;
+    }
+
+    function previewDeposit(uint256 assets) external view returns (uint256) {
+        return convertToShares(assets);
+    }
+
+    function previewRedeem(uint256 shares) external view returns (uint256) {
+        return convertToAssets(shares);
+    }
+
+    function deposit(uint256 assets, address receiver) external returns (uint256 shares) {
+        require(assets > 0, "zero assets");
+        shares = convertToShares(assets);
+        require(asset.transferFrom(msg.sender, address(this), assets), "transfer");
+        totalSupply += shares;
+        balanceOf[receiver] += shares;
+        emit Transfer(address(0), receiver, shares);
+        emit Deposit(msg.sender, receiver, assets, shares);
+    }
+
+    function redeem(uint256 shares, address receiver, address owner) external returns (uint256 assets) {
+        require(shares > 0, "zero shares");
+        if (msg.sender != owner) {
+            uint256 allowed = allowance[owner][msg.sender];
+            if (allowed != type(uint256).max) {
+                require(allowed >= shares, "allowance");
+                allowance[owner][msg.sender] = allowed - shares;
+            }
+        }
+        assets = convertToAssets(shares);
+        require(balanceOf[owner] >= shares, "balance");
+        balanceOf[owner] -= shares;
+        totalSupply -= shares;
+        emit Transfer(owner, address(0), shares);
+        emit Withdraw(msg.sender, receiver, owner, assets, shares);
+        require(asset.transfer(receiver, assets), "transfer");
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        require(balanceOf[msg.sender] >= amount, "balance");
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        emit Transfer(msg.sender, to, amount);
+        return true;
+    }
+}
+```
+
+### TokenC01
+storage: name (string_storage), symbol (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+(source: the STANDARD TOKEN above, with this contract's name)
+
+Deployment of this case (A0 is the contract under test):
+  A0 = VaultC01
+  A1 = TokenC01
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    TokenC01(A1).mint(U0, 100);
+    TokenC01(A1).mint(U1, 100);
+    TokenC01(A1).mint(U2, 100);
+    TokenC01(A1).mint(U3, 100);
+    vm.prank(U0); TokenC01(A1).approve(A0, type(uint256).max);
+    vm.prank(U1); TokenC01(A1).approve(A0, type(uint256).max);
+    vm.prank(U2); TokenC01(A1).approve(A0, type(uint256).max);
+    vm.prank(U3); TokenC01(A1).approve(A0, type(uint256).max);
+
+=================== CASE C02 ===================
+Contracts (the first is the one under test):
+### StakingRewardsC02
+storage: owner (address), periodFinish (uint256), rewardRate (uint256), rewardsDuration (uint256), lastUpdateTime (uint256), rewardPerTokenStored (uint256), userRewardPerTokenPaid (mapping(address,uint256)), rewards (mapping(address,uint256)), totalSupply (uint256), balanceOf (mapping(address,uint256)), entered (bool)
+functions: exit(), getReward(), notifyRewardAmount(uint256), recoverERC20(address,uint256), setRewardsDuration(uint256), stake(uint256), withdraw(uint256)
+```solidity
+contract StakingRewardsC02 {
+    TokenC02 public immutable stakingToken;
+    TokenC02 public immutable rewardsToken;
+    address public owner;
+
+    uint256 public periodFinish;
+    uint256 public rewardRate;
+    uint256 public rewardsDuration;
+    uint256 public lastUpdateTime;
+    uint256 public rewardPerTokenStored;
+
+    mapping(address => uint256) public userRewardPerTokenPaid;
+    mapping(address => uint256) public rewards;
+
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+
+    bool private entered;
+
+    event RewardAdded(uint256 reward);
+    event Staked(address indexed user, uint256 amount);
+    event Withdrawn(address indexed user, uint256 amount);
+    event RewardPaid(address indexed user, uint256 reward);
+    event RewardsDurationUpdated(uint256 newDuration);
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "owner");
+        _;
+    }
+
+    modifier nonReentrant() {
+        require(!entered, "reentrant");
+        entered = true;
+        _;
+        entered = false;
+    }
+
+    modifier updateReward(address account) {
+        rewardPerTokenStored = rewardPerToken();
+        lastUpdateTime = lastTimeRewardApplicable();
+        if (account != address(0)) {
+            rewards[account] = earned(account);
+            userRewardPerTokenPaid[account] = rewardPerTokenStored;
+        }
+        _;
+    }
+
+    constructor(TokenC02 _stakingToken, TokenC02 _rewardsToken, uint256 _rewardsDuration) {
+        require(address(_stakingToken) != address(_rewardsToken), "same token");
+        stakingToken = _stakingToken;
+        rewardsToken = _rewardsToken;
+        rewardsDuration = _rewardsDuration;
+        owner = msg.sender;
+    }
+
+    function lastTimeRewardApplicable() public view returns (uint256) {
+        return block.timestamp < periodFinish ? block.timestamp : periodFinish;
+    }
+
+    function rewardPerToken() public view returns (uint256) {
+        if (totalSupply == 0) {
+            return rewardPerTokenStored;
+        }
+        return rewardPerTokenStored + ((lastTimeRewardApplicable() - lastUpdateTime) * rewardRate * 1e18) / totalSupply;
+    }
+
+    function earned(address account) public view returns (uint256) {
+        return (balanceOf[account] * (rewardPerToken() - userRewardPerTokenPaid[account])) / 1e18 + rewards[account];
+    }
+
+    function getRewardForDuration() external view returns (uint256) {
+        return rewardRate * rewardsDuration;
+    }
+
+    function stake(uint256 amount) external nonReentrant updateReward(msg.sender) {
+        require(amount > 0, "zero");
+        totalSupply += amount;
+        balanceOf[msg.sender] += amount;
+        require(stakingToken.transferFrom(msg.sender, address(this), amount), "transfer");
+        emit Staked(msg.sender, amount);
+    }
+
+    function withdraw(uint256 amount) public nonReentrant updateReward(msg.sender) {
+        require(amount > 0, "zero");
+        totalSupply -= amount;
+        balanceOf[msg.sender] -= amount;
+        require(stakingToken.transfer(msg.sender, amount), "transfer");
+        emit Withdrawn(msg.sender, amount);
+    }
+
+    function getReward() public nonReentrant updateReward(msg.sender) {
+        uint256 reward = rewards[msg.sender];
+        if (reward > 0) {
+            rewards[msg.sender] = 0;
+            require(rewardsToken.transfer(msg.sender, reward), "transfer");
+            emit RewardPaid(msg.sender, reward);
+        }
+    }
+
+    function exit() external {
+        withdraw(balanceOf[msg.sender]);
+        getReward();
+    }
+
+    function notifyRewardAmount(uint256 reward) external onlyOwner updateReward(address(0)) {
+        if (block.timestamp >= periodFinish) {
+            rewardRate = reward / rewardsDuration;
+        } else {
+            uint256 remaining = periodFinish - block.timestamp;
+            uint256 leftover = remaining * rewardRate;
+            rewardRate = (reward + leftover) / rewardsDuration;
+        }
+        uint256 balance = rewardsToken.balanceOf(address(this));
+        require(rewardRate <= balance / rewardsDuration, "reward too high");
+        lastUpdateTime = block.timestamp;
+        periodFinish = block.timestamp + rewardsDuration;
+        emit RewardAdded(reward);
+    }
+
+    function setRewardsDuration(uint256 _rewardsDuration) external onlyOwner {
+        require(block.timestamp > periodFinish, "period active");
+        require(_rewardsDuration > 0, "zero");
+        rewardsDuration = _rewardsDuration;
+        emit RewardsDurationUpdated(_rewardsDuration);
+    }
+
+    function recoverERC20(TokenC02 token, uint256 amount) external onlyOwner {
+        require(address(token) != address(stakingToken), "staking token");
+        require(address(token) != address(rewardsToken), "rewards token");
+        require(token.transfer(owner, amount), "transfer");
+    }
+}
+```
+
+### TokenC02
+storage: name (string_storage), symbol (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+(source: the STANDARD TOKEN above, with this contract's name)
+
+### TokenC02
+storage: name (string_storage), symbol (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+(source: the STANDARD TOKEN above, with this contract's name)
+
+Deployment of this case (A0 is the contract under test):
+  A0 = StakingRewardsC02
+  A1 = TokenC02_STK  (an instance of TokenC02; write its storage as "TokenC02_STK.var")
+  A2 = TokenC02_RWD  (an instance of TokenC02; write its storage as "TokenC02_RWD.var")
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    TokenC02(A2).mint(A0, 100 * 7 days);
+    StakingRewardsC02(A0).notifyRewardAmount(100 * 7 days);
+    TokenC02(A1).mint(U0, 100);
+    TokenC02(A1).mint(U1, 100);
+    TokenC02(A1).mint(U2, 100);
+    TokenC02(A1).mint(U3, 100);
+    vm.prank(U0); TokenC02(A1).approve(A0, type(uint256).max);
+    vm.prank(U1); TokenC02(A1).approve(A0, type(uint256).max);
+    vm.prank(U2); TokenC02(A1).approve(A0, type(uint256).max);
+    vm.prank(U3); TokenC02(A1).approve(A0, type(uint256).max);
+
+=================== CASE C03 ===================
+Contracts (the first is the one under test):
+### EthPoolC03
+storage: balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256))), totalDeposits (uint256), status (uint256)
+functions: approve(address,uint256), deposit(), depositFor(address), transfer(address,uint256), transferFrom(address,address,uint256), withdraw(uint256), withdrawAll()
+```solidity
+contract EthPoolC03 {
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+    uint256 public totalDeposits;
+
+    uint256 private status = 1;
+
+    event Deposit(address indexed account, uint256 amount);
+    event Withdrawal(address indexed account, uint256 amount);
+    event Transfer(address indexed from, address indexed to, uint256 amount);
+    event Approval(address indexed owner, address indexed spender, uint256 amount);
+
+    modifier nonReentrant() {
+        require(status == 1, "locked");
+        status = 2;
+        _;
+        status = 1;
+    }
+
+    receive() external payable {
+        _deposit(msg.sender, msg.value);
+    }
+
+    function deposit() external payable {
+        _deposit(msg.sender, msg.value);
+    }
+
+    function depositFor(address account) external payable {
+        _deposit(account, msg.value);
+    }
+
+    function _deposit(address account, uint256 amount) internal {
+        require(amount > 0, "zero");
+        balanceOf[account] += amount;
+        totalDeposits += amount;
+        emit Deposit(account, amount);
+    }
+
+    function withdraw(uint256 amount) external nonReentrant {
+        require(balanceOf[msg.sender] >= amount, "balance");
+        balanceOf[msg.sender] -= amount;
+        totalDeposits -= amount;
+        (bool ok, ) = msg.sender.call{value: amount}("");
+        require(ok, "send failed");
+        emit Withdrawal(msg.sender, amount);
+    }
+
+    function withdrawAll() external nonReentrant {
+        uint256 amount = balanceOf[msg.sender];
+        require(amount > 0, "empty");
+        totalDeposits -= amount;
+        (bool ok, ) = msg.sender.call{value: amount}("");
+        require(ok, "send failed");
+        balanceOf[msg.sender] = 0;
+        emit Withdrawal(msg.sender, amount);
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        _transfer(msg.sender, to, amount);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        uint256 allowed = allowance[from][msg.sender];
+        if (allowed != type(uint256).max) {
+            require(allowed >= amount, "allowance");
+            allowance[from][msg.sender] = allowed - amount;
+        }
+        _transfer(from, to, amount);
+        return true;
+    }
+
+    function _transfer(address from, address to, uint256 amount) internal {
+        require(balanceOf[from] >= amount, "balance");
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        emit Transfer(from, to, amount);
+    }
+}
+```
+
+Deployment of this case (A0 is the contract under test):
+  A0 = EthPoolC03
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  U1 is a contract: when the contract under test calls it (e.g. sends it ETH) it may call back into the contract once per transaction, with any function and arguments.
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+
+=================== CASE C04 ===================
+Contracts (the first is the one under test):
+### LendingC04
+storage: supplied (mapping(address,uint256)), collateralOf (mapping(address,uint256)), debtOf (mapping(address,uint256)), totalSupplied (uint256), totalBorrowed (uint256)
+functions: borrow(uint256), depositCollateral(uint256), liquidate(address,uint256), repay(address,uint256), supply(uint256), withdrawCollateral(uint256), withdrawSupply(uint256)
+```solidity
+contract LendingC04 {
+    uint256 public constant LTV_BPS = 7_500;
+    uint256 public constant LIQ_THRESHOLD_BPS = 8_000;
+    uint256 public constant LIQ_BONUS_BPS = 500;
+    uint256 public constant BPS = 10_000;
+
+    TokenC04 public immutable debtToken;
+    TokenC04 public immutable collateralToken;
+    AmmC04 public immutable priceSource;
+
+    mapping(address => uint256) public supplied;
+    mapping(address => uint256) public collateralOf;
+    mapping(address => uint256) public debtOf;
+    uint256 public totalSupplied;
+    uint256 public totalBorrowed;
+
+    event Supply(address indexed account, uint256 amount);
+    event WithdrawSupply(address indexed account, uint256 amount);
+    event DepositCollateral(address indexed account, uint256 amount);
+    event WithdrawCollateral(address indexed account, uint256 amount);
+    event Borrow(address indexed account, uint256 amount);
+    event Repay(address indexed payer, address indexed account, uint256 amount);
+    event Liquidate(address indexed liquidator, address indexed account, uint256 repaid, uint256 seized);
+
+    constructor(TokenC04 _debtToken, TokenC04 _collateralToken, AmmC04 _priceSource) {
+        require(address(_priceSource.token0()) == address(_debtToken), "token0");
+        require(address(_priceSource.token1()) == address(_collateralToken), "token1");
+        debtToken = _debtToken;
+        collateralToken = _collateralToken;
+        priceSource = _priceSource;
+    }
+
+    function collateralPrice() public view returns (uint256) {
+        (uint256 reserveDebt, uint256 reserveCollateral) = priceSource.getReserves();
+        require(reserveCollateral > 0, "no liquidity");
+        return (reserveDebt * 1e18) / reserveCollateral;
+    }
+
+    function collateralValue(address account) public view returns (uint256) {
+        return (collateralOf[account] * collateralPrice()) / 1e18;
+    }
+
+    function maxBorrow(address account) public view returns (uint256) {
+        return (collateralValue(account) * LTV_BPS) / BPS;
+    }
+
+    function isHealthy(address account) public view returns (bool) {
+        return debtOf[account] * BPS <= collateralValue(account) * LIQ_THRESHOLD_BPS;
+    }
+
+    function supply(uint256 amount) external {
+        require(amount > 0, "zero");
+        require(debtToken.transferFrom(msg.sender, address(this), amount), "transfer");
+        supplied[msg.sender] += amount;
+        totalSupplied += amount;
+        emit Supply(msg.sender, amount);
+    }
+
+    function withdrawSupply(uint256 amount) external {
+        require(supplied[msg.sender] >= amount, "supplied");
+        require(debtToken.balanceOf(address(this)) >= amount, "liquidity");
+        supplied[msg.sender] -= amount;
+        totalSupplied -= amount;
+        require(debtToken.transfer(msg.sender, amount), "transfer");
+        emit WithdrawSupply(msg.sender, amount);
+    }
+
+    function depositCollateral(uint256 amount) external {
+        require(amount > 0, "zero");
+        require(collateralToken.transferFrom(msg.sender, address(this), amount), "transfer");
+        collateralOf[msg.sender] += amount;
+        emit DepositCollateral(msg.sender, amount);
+    }
+
+    function withdrawCollateral(uint256 amount) external {
+        require(collateralOf[msg.sender] >= amount, "collateral");
+        collateralOf[msg.sender] -= amount;
+        require(debtOf[msg.sender] <= maxBorrow(msg.sender), "undercollateralized");
+        require(collateralToken.transfer(msg.sender, amount), "transfer");
+        emit WithdrawCollateral(msg.sender, amount);
+    }
+
+    function borrow(uint256 amount) external {
+        require(amount > 0, "zero");
+        debtOf[msg.sender] += amount;
+        totalBorrowed += amount;
+        require(debtOf[msg.sender] <= maxBorrow(msg.sender), "undercollateralized");
+        require(debtToken.transfer(msg.sender, amount), "transfer");
+        emit Borrow(msg.sender, amount);
+    }
+
+    function repay(address account, uint256 amount) external {
+        uint256 debt = debtOf[account];
+        if (amount > debt) amount = debt;
+        require(amount > 0, "zero");
+        require(debtToken.transferFrom(msg.sender, address(this), amount), "transfer");
+        debtOf[account] = debt - amount;
+        totalBorrowed -= amount;
+        emit Repay(msg.sender, account, amount);
+    }
+
+    function liquidate(address account, uint256 repayAmount) external {
+        require(!isHealthy(account), "healthy");
+        uint256 debt = debtOf[account];
+        require(repayAmount > 0 && repayAmount <= debt / 2, "amount");
+        uint256 seize = (repayAmount * 1e18 / collateralPrice()) * (BPS + LIQ_BONUS_BPS) / BPS;
+        if (seize > collateralOf[account]) seize = collateralOf[account];
+        require(debtToken.transferFrom(msg.sender, address(this), repayAmount), "transfer");
+        debtOf[account] = debt - repayAmount;
+        totalBorrowed -= repayAmount;
+        collateralOf[account] -= seize;
+        require(collateralToken.transfer(msg.sender, seize), "transfer");
+        emit Liquidate(msg.sender, account, repayAmount, seize);
+    }
+}
+```
+
+### TokenC04
+storage: name (string_storage), symbol (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+(source: the STANDARD TOKEN above, with this contract's name)
+
+### TokenC04
+storage: name (string_storage), symbol (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+(source: the STANDARD TOKEN above, with this contract's name)
+
+### AmmC04
+storage: reserve0 (uint256), reserve1 (uint256), totalShares (uint256), sharesOf (mapping(address,uint256))
+functions: addLiquidity(uint256,uint256), removeLiquidity(uint256), swap(address,uint256,uint256)
+```solidity
+contract AmmC04 {
+    TokenC04 public immutable token0;
+    TokenC04 public immutable token1;
+    uint256 private reserve0;
+    uint256 private reserve1;
+    uint256 public totalShares;
+    mapping(address => uint256) public sharesOf;
+
+    event Swap(address indexed sender, address tokenIn, uint256 amountIn, uint256 amountOut);
+    event AddLiquidity(address indexed provider, uint256 amount0, uint256 amount1, uint256 shares);
+
+    constructor(TokenC04 _token0, TokenC04 _token1) {
+        token0 = _token0;
+        token1 = _token1;
+    }
+
+    function getReserves() external view returns (uint256, uint256) {
+        return (reserve0, reserve1);
+    }
+
+    function addLiquidity(uint256 amount0, uint256 amount1) external returns (uint256 shares) {
+        require(token0.transferFrom(msg.sender, address(this), amount0), "transfer0");
+        require(token1.transferFrom(msg.sender, address(this), amount1), "transfer1");
+        if (totalShares == 0) {
+            shares = _sqrt(amount0 * amount1);
+        } else {
+            uint256 s0 = (amount0 * totalShares) / reserve0;
+            uint256 s1 = (amount1 * totalShares) / reserve1;
+            shares = s0 < s1 ? s0 : s1;
+        }
+        require(shares > 0, "shares");
+        totalShares += shares;
+        sharesOf[msg.sender] += shares;
+        reserve0 += amount0;
+        reserve1 += amount1;
+        emit AddLiquidity(msg.sender, amount0, amount1, shares);
+    }
+
+    function removeLiquidity(uint256 shares) external returns (uint256 amount0, uint256 amount1) {
+        require(sharesOf[msg.sender] >= shares && shares > 0, "shares");
+        amount0 = (shares * reserve0) / totalShares;
+        amount1 = (shares * reserve1) / totalShares;
+        sharesOf[msg.sender] -= shares;
+        totalShares -= shares;
+        reserve0 -= amount0;
+        reserve1 -= amount1;
+        require(token0.transfer(msg.sender, amount0), "transfer0");
+        require(token1.transfer(msg.sender, amount1), "transfer1");
+    }
+
+    function getAmountOut(uint256 amountIn, uint256 reserveIn, uint256 reserveOut) public pure returns (uint256) {
+        uint256 amountInWithFee = amountIn * 997;
+        return (amountInWithFee * reserveOut) / (reserveIn * 1000 + amountInWithFee);
+    }
+
+    function swap(address tokenIn, uint256 amountIn, uint256 minAmountOut) external returns (uint256 amountOut) {
+        require(amountIn > 0, "zero");
+        bool zeroForOne = tokenIn == address(token0);
+        require(zeroForOne || tokenIn == address(token1), "token");
+        (TokenC04 tIn, TokenC04 tOut, uint256 rIn, uint256 rOut) =
+            zeroForOne ? (token0, token1, reserve0, reserve1) : (token1, token0, reserve1, reserve0);
+        amountOut = getAmountOut(amountIn, rIn, rOut);
+        require(amountOut >= minAmountOut && amountOut > 0, "slippage");
+        require(tIn.transferFrom(msg.sender, address(this), amountIn), "transferIn");
+        require(tOut.transfer(msg.sender, amountOut), "transferOut");
+        if (zeroForOne) {
+            reserve0 += amountIn;
+            reserve1 -= amountOut;
+        } else {
+            reserve1 += amountIn;
+            reserve0 -= amountOut;
+        }
+        emit Swap(msg.sender, tokenIn, amountIn, amountOut);
+    }
+
+    function _sqrt(uint256 y) internal pure returns (uint256 z) {
+        if (y > 3) {
+            z = y;
+            uint256 x = y / 2 + 1;
+            while (x < z) {
+                z = x;
+                x = (y / x + x) / 2;
+            }
+        } else if (y != 0) {
+            z = 1;
+        }
+    }
+}
+```
+
+Deployment of this case (A0 is the contract under test):
+  A0 = LendingC04
+  A1 = TokenC04_USDS  (an instance of TokenC04; write its storage as "TokenC04_USDS.var")
+  A2 = TokenC04_GCOL  (an instance of TokenC04; write its storage as "TokenC04_GCOL.var")
+  A3 = AmmC04
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    TokenC04(A1).mint(address(this), 1_000e18);
+    TokenC04(A2).mint(address(this), 1_000e18);
+    TokenC04(A1).approve(A3, type(uint256).max);
+    TokenC04(A2).approve(A3, type(uint256).max);
+    AmmC04(A3).addLiquidity(1_000e18, 1_000e18);
+    TokenC04(A1).mint(U0, 10_000e18);
+    vm.prank(U0); TokenC04(A1).approve(A0, type(uint256).max);
+    vm.prank(U0); LendingC04(A0).supply(10_000e18);
+    TokenC04(A2).mint(U0, 100);
+    TokenC04(A2).mint(U1, 100);
+    TokenC04(A2).mint(U2, 100);
+    TokenC04(A2).mint(U3, 100);
+    TokenC04(A1).mint(U0, 100);
+    TokenC04(A1).mint(U1, 100);
+    TokenC04(A1).mint(U2, 100);
+    TokenC04(A1).mint(U3, 100);
+    vm.prank(U0); TokenC04(A2).approve(A0, type(uint256).max);
+    vm.prank(U1); TokenC04(A2).approve(A0, type(uint256).max);
+    vm.prank(U2); TokenC04(A2).approve(A0, type(uint256).max);
+    vm.prank(U3); TokenC04(A2).approve(A0, type(uint256).max);
+    vm.prank(U0); TokenC04(A1).approve(A0, type(uint256).max);
+    vm.prank(U1); TokenC04(A1).approve(A0, type(uint256).max);
+    vm.prank(U2); TokenC04(A1).approve(A0, type(uint256).max);
+    vm.prank(U3); TokenC04(A1).approve(A0, type(uint256).max);
+    vm.prank(U0); TokenC04(A1).approve(A3, type(uint256).max);
+    vm.prank(U1); TokenC04(A1).approve(A3, type(uint256).max);
+    vm.prank(U2); TokenC04(A1).approve(A3, type(uint256).max);
+    vm.prank(U3); TokenC04(A1).approve(A3, type(uint256).max);
+    vm.prank(U0); TokenC04(A2).approve(A3, type(uint256).max);
+    vm.prank(U1); TokenC04(A2).approve(A3, type(uint256).max);
+    vm.prank(U2); TokenC04(A2).approve(A3, type(uint256).max);
+    vm.prank(U3); TokenC04(A2).approve(A3, type(uint256).max);
+
+=================== CASE C05 ===================
+Contracts (the first is the one under test):
+### VoucherClaimC05
+storage: owner (address), signer (address), paused (bool), nonceUsed (mapping(address,mapping(uint256,bool))), totalClaimed (mapping(address,uint256))
+functions: claim(uint256,uint256,uint256,uint8,bytes32,bytes32), setPaused(bool), setSigner(address), sweep(address,uint256)
+```solidity
+contract VoucherClaimC05 {
+    bytes32 public constant CLAIM_TYPEHASH =
+        keccak256("Claim(address account,uint256 amount,uint256 nonce,uint256 deadline)");
+    bytes32 private constant DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+    uint256 private constant HALF_ORDER = 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0;
+
+    TokenC05 public immutable token;
+    address public owner;
+    address public signer;
+    bool public paused;
+
+    uint256 private immutable cachedChainId;
+    bytes32 private immutable cachedDomainSeparator;
+
+    mapping(address => mapping(uint256 => bool)) public nonceUsed;
+    mapping(address => uint256) public totalClaimed;
+
+    event Claimed(address indexed account, uint256 amount, uint256 nonce);
+    event SignerUpdated(address indexed signer);
+    event Paused(bool paused);
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "owner");
+        _;
+    }
+
+    constructor(TokenC05 _token, address _signer) {
+        require(_signer != address(0), "signer");
+        token = _token;
+        signer = _signer;
+        owner = msg.sender;
+        cachedChainId = block.chainid;
+        cachedDomainSeparator = _buildDomainSeparator();
+    }
+
+    function _buildDomainSeparator() private view returns (bytes32) {
+        return keccak256(
+            abi.encode(DOMAIN_TYPEHASH, keccak256(bytes("VoucherClaim")), keccak256(bytes("1")), block.chainid, address(this))
+        );
+    }
+
+    function DOMAIN_SEPARATOR() public view returns (bytes32) {
+        return block.chainid == cachedChainId ? cachedDomainSeparator : _buildDomainSeparator();
+    }
+
+    function hashClaim(address account, uint256 amount, uint256 nonce, uint256 deadline) public view returns (bytes32) {
+        bytes32 structHash = keccak256(abi.encode(CLAIM_TYPEHASH, account, amount, nonce, deadline));
+        return keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR(), structHash));
+    }
+
+    function claim(uint256 amount, uint256 nonce, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external {
+        require(!paused, "paused");
+        require(block.timestamp <= deadline, "expired");
+        require(!nonceUsed[msg.sender][nonce], "nonce used");
+        require(uint256(s) <= HALF_ORDER, "bad s");
+        require(v == 27 || v == 28, "bad v");
+
+        address recovered = ecrecover(hashClaim(msg.sender, amount, nonce, deadline), v, r, s);
+        require(recovered != address(0) && recovered == signer, "bad signature");
+
+        nonceUsed[msg.sender][nonce] = true;
+        totalClaimed[msg.sender] += amount;
+        require(token.transfer(msg.sender, amount), "transfer");
+        emit Claimed(msg.sender, amount, nonce);
+    }
+
+    function setSigner(address _signer) external onlyOwner {
+        require(_signer != address(0), "signer");
+        signer = _signer;
+        emit SignerUpdated(_signer);
+    }
+
+    function setPaused(bool _paused) external onlyOwner {
+        paused = _paused;
+        emit Paused(_paused);
+    }
+
+    function sweep(address to, uint256 amount) external onlyOwner {
+        require(paused, "not paused");
+        require(token.transfer(to, amount), "transfer");
+    }
+}
+```
+
+### TokenC05
+storage: name (string_storage), symbol (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+(source: the STANDARD TOKEN above, with this contract's name)
+
+Deployment of this case (A0 is the contract under test):
+  A0 = VoucherClaimC05
+  A1 = TokenC05
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    TokenC05(A1).mint(A0, 1_000_000e18);

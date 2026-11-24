@@ -1,0 +1,303 @@
+REVIEW BATCH 4 of 4: cases R10, R11, R12. Reply with one JSON object keyed by these case ids (see your instructions).
+
+===== CASE R10 =====
+Contracts (the first is the one under test):
+### DualAssetVault
+storage: assets (array(contract(MockToken)148)2_storage), totalSupply (uint256), balanceOf (mapping(address,uint256))
+functions: depositMulti(uint256[]), withdraw(uint256)
+```solidity
+contract DualAssetVault {
+    MockToken[2] public assets;
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+
+    event Deposit(address indexed user, uint256 value, uint256 shares);
+    event Withdraw(address indexed user, uint256 shares, uint256 out0, uint256 out1);
+
+    constructor(MockToken a0, MockToken a1) {
+        assets[0] = a0;
+        assets[1] = a1;
+    }
+
+    function totalHoldings() public view returns (uint256) {
+        return assets[0].balanceOf(address(this)) + assets[1].balanceOf(address(this));
+    }
+
+    function depositMulti(uint256[] calldata amounts) external returns (uint256 shares) {
+        require(amounts.length == 2, "length");
+        uint256 holdings;
+        uint256 value;
+        for (uint256 i = 0; i < amounts.length; i++) {
+            holdings += assets[i].balanceOf(address(this));
+            value += amounts[i];
+        }
+        require(value > 0, "zero");
+        shares = (totalSupply == 0 || holdings == 0) ? value : value * totalSupply / holdings;
+        require(shares > 0, "shares");
+
+        for (uint256 i = 0; i < amounts.length; i++) {
+            if (amounts[i] > 0) assets[i].transferFrom(msg.sender, address(this), amounts[i]);
+        }
+        totalSupply += shares;
+        balanceOf[msg.sender] += shares;
+        emit Deposit(msg.sender, value, shares);
+    }
+
+    function withdraw(uint256 shares) external {
+        require(shares > 0 && balanceOf[msg.sender] >= shares, "shares");
+        uint256 out0 = shares * assets[0].balanceOf(address(this)) / totalSupply;
+        uint256 out1 = shares * assets[1].balanceOf(address(this)) / totalSupply;
+        balanceOf[msg.sender] -= shares;
+        totalSupply -= shares;
+        if (out0 > 0) assets[0].transfer(msg.sender, out0);
+        if (out1 > 0) assets[1].transfer(msg.sender, out1);
+        emit Withdraw(msg.sender, shares, out0, out1);
+    }
+}
+```
+
+Deployment of this case (A0 is the contract under test):
+  A0 = DualAssetVault
+  A1 = MockToken_A  (an instance of MockToken; write its storage as "MockToken_A.var")
+  A2 = MockToken_B  (an instance of MockToken; write its storage as "MockToken_B.var")
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    MockToken(A1).mint(U0, 100e18);
+    MockToken(A2).mint(U0, 100e18);
+    vm.prank(U0); MockToken(A1).approve(A0, type(uint256).max);
+    vm.prank(U0); MockToken(A2).approve(A0, type(uint256).max);
+    { uint256[] memory amts = new uint256[](2); amts[0] = 100e18; amts[1] = 100e18; vm.prank(U0); DualAssetVault(A0).depositMulti(amts); }
+    MockToken(A1).mint(U1, 100e18);
+    MockToken(A2).mint(U1, 100e18);
+    vm.prank(U1); MockToken(A1).approve(A0, type(uint256).max);
+    vm.prank(U1); MockToken(A2).approve(A0, type(uint256).max);
+
+RULES TO REVIEW:
+{"rules":[{"name":"ledger","family":"ledger","params":{"accounts":"balanceOf","total":"totalSupply"},"expr":"","why":"shares sum to supply"},{"name":"no_third_party","family":"no_third_party_loss","params":{"balance":"balanceOf"},"expr":"","why":"no one loses shares in others' calls"},{"name":"deposit_fair","family":"custom","params":{},"expr":"ok and called(\"depositMulti\") and pre(\"totalSupply\") > 0 and wide(post(\"totalSupply\") - pre(\"totalSupply\")) * wide(pre(\"MockToken_A.balanceOf\", A0) + pre(\"MockToken_B.balanceOf\", A0)) > wide(post(\"MockToken_A.balanceOf\", A0) + post(\"MockToken_B.balanceOf\", A0) - pre(\"MockToken_A.balanceOf\", A0) - pre(\"MockToken_B.balanceOf\", A0)) * wide(pre(\"totalSupply\"))","why":"shares minted never exceed value brought in relative to total holdings"},{"name":"deposit_mint_sync","family":"custom","params":{},"expr":"ok and called(\"depositMulti\") and post(\"totalSupply\") - pre(\"totalSupply\") != post(\"balanceOf\", sender) - pre(\"balanceOf\", sender)","why":"minted shares go to depositor"},{"name":"deposit_brings_value","family":"custom","params":{},"expr":"ok and called(\"depositMulti\") and post(\"MockToken_A.balanceOf\", A0) + post(\"MockToken_B.balanceOf\", A0) <= pre(\"MockToken_A.balanceOf\", A0) + pre(\"MockToken_B.balanceOf\", A0)","why":"deposit always brings in tokens"},{"name":"deposit_nonzero","family":"custom","params":{},"expr":"ok and called(\"depositMulti\") and post(\"totalSupply\") <= pre(\"totalSupply\")","why":"deposit always mints"},{"name":"share_price_monotone","family":"custom","params":{},"expr":"ok and pre(\"totalSupply\") > 0 and post(\"totalSupply\") > 0 and wide(post(\"MockToken_A.balanceOf\", A0) + post(\"MockToken_B.balanceOf\", A0)) * wide(pre(\"totalSupply\")) < wide(pre(\"MockToken_A.balanceOf\", A0) + pre(\"MockToken_B.balanceOf\", A0)) * wide(post(\"totalSupply\"))","why":"holdings per share never drop"},{"name":"withdraw_burn","family":"exact_decrease","params":{"fn":"withdraw","value":"post(\"balanceOf\", sender)","before":"pre(\"balanceOf\", sender)","delta":"arg(0)"},"expr":"","why":"burns exactly shares"},{"name":"withdraw_burn_total","family":"exact_decrease","params":{"fn":"withdraw","value":"post(\"totalSupply\")","before":"pre(\"totalSupply\")","delta":"arg(0)"},"expr":"","why":"supply drops by shares"},{"name":"withdraw_fair_A","family":"custom","params":{},"expr":"ok and called(\"withdraw\") and wide(pre(\"MockToken_A.balanceOf\", A0) - post(\"MockToken_A.balanceOf\", A0)) * wide(pre(\"totalSupply\")) > wide(arg(0)) * wide(pre(\"MockToken_A.balanceOf\", A0))","why":"fair share of A"},{"name":"withdraw_fair_B","family":"custom","params":{},"expr":"ok and called(\"withdraw\") and wide(pre(\"MockToken_B.balanceOf\", A0) - post(\"MockToken_B.balanceOf\", A0)) * wide(pre(\"totalSupply\")) > wide(arg(0)) * wide(pre(\"MockToken_B.balanceOf\", A0))","why":"fair share of B"},{"name":"assets_out_only_withdraw","family":"custom","params":{},"expr":"ok and (post(\"MockToken_A.balanceOf\", A0) < pre(\"MockToken_A.balanceOf\", A0) or post(\"MockToken_B.balanceOf\", A0) < pre(\"MockToken_B.balanceOf\", A0)) and not called(\"withdraw\")","why":"assets leave only via withdraw"},{"name":"no_third_party_token_loss","family":"custom","params":{},"expr":"ok and u != sender and u != A0 and (post(\"MockToken_A.balanceOf\", u) < pre(\"MockToken_A.balanceOf\", u) or post(\"MockToken_B.balanceOf\", u) < pre(\"MockToken_B.balanceOf\", u))","why":"no token loss for others"},{"name":"withdraw_exit","family":"exit_amount","params":{"fn":"withdraw","amount_arg":"0","balance":"balanceOf"},"expr":"","why":"holders can exit"}],"invariants":[{"name":"supply_eq_sum","expr":"post(\"totalSupply\") != post_sum(\"balanceOf\")","why":"supply equals sum"},{"name":"backed","expr":"post(\"totalSupply\") > 0 and post(\"MockToken_A.balanceOf\", A0) + post(\"MockToken_B.balanceOf\", A0) == 0","why":"shares backed"}]}
+
+===== CASE R11 =====
+Contracts (the first is the one under test):
+### StablePool
+storage: totalSupply (uint256), balanceOf (mapping(address,uint256))
+functions: deposit(uint256), transfer(address,uint256), withdraw(uint256)
+```solidity
+contract StablePool {
+    MockToken public immutable asset;
+    uint256 public constant SCALE = 1e12;
+
+    string public constant name = "Stable Pool LP";
+    uint8 public constant decimals = 18;
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+
+    event Deposit(address indexed user, uint256 amount18, uint256 pulled, uint256 lp);
+    event Withdraw(address indexed user, uint256 lp, uint256 paid);
+
+    constructor(MockToken _asset) {
+        asset = _asset;
+    }
+
+    function totalAssets18() public view returns (uint256) {
+        return asset.balanceOf(address(this)) * SCALE;
+    }
+
+    function deposit(uint256 amount18) external returns (uint256 lp) {
+        require(amount18 > 0, "zero");
+        uint256 assets18 = totalAssets18();
+        lp = (totalSupply == 0 || assets18 == 0) ? amount18 : amount18 * totalSupply / assets18;
+        require(lp > 0, "lp");
+        uint256 pulled = amount18 / SCALE;
+        if (pulled > 0) asset.transferFrom(msg.sender, address(this), pulled);
+        totalSupply += lp;
+        balanceOf[msg.sender] += lp;
+        emit Deposit(msg.sender, amount18, pulled, lp);
+    }
+
+    function withdraw(uint256 lp) external returns (uint256 paid) {
+        require(lp > 0 && balanceOf[msg.sender] >= lp, "lp");
+        paid = lp * asset.balanceOf(address(this)) / totalSupply;
+        balanceOf[msg.sender] -= lp;
+        totalSupply -= lp;
+        if (paid > 0) asset.transfer(msg.sender, paid);
+        emit Withdraw(msg.sender, lp, paid);
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+}
+```
+
+Deployment of this case (A0 is the contract under test):
+  A0 = StablePool
+  A1 = MockToken
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    MockToken(A1).mint(U0, 1_000e6);
+    vm.prank(U0); MockToken(A1).approve(A0, type(uint256).max);
+    vm.prank(U0); StablePool(A0).deposit(1_000e18);
+    MockToken(A1).mint(U1, 10e6);
+    vm.prank(U1); MockToken(A1).approve(A0, type(uint256).max);
+
+RULES TO REVIEW:
+{"rules":[{"name":"ledger","family":"ledger","params":{"accounts":"balanceOf","total":"totalSupply"},"expr":"","why":"lp sums to supply"},{"name":"no_third_party","family":"no_third_party_loss","params":{"balance":"balanceOf"},"expr":"","why":"no one loses lp in others' calls"},{"name":"deposit_fair","family":"custom","params":{},"expr":"ok and called(\"deposit\") and pre(\"totalSupply\") > 0 and wide(post(\"totalSupply\") - pre(\"totalSupply\")) * wide(pre(\"MockToken.balanceOf\", A0)) > wide(post(\"MockToken.balanceOf\", A0) - pre(\"MockToken.balanceOf\", A0)) * wide(pre(\"totalSupply\"))","why":"lp minted never exceeds the tokens actually pulled (no rounding in depositor's favour)"},{"name":"deposit_pulls_something","family":"custom","params":{},"expr":"ok and called(\"deposit\") and post(\"MockToken.balanceOf\", A0) <= pre(\"MockToken.balanceOf\", A0)","why":"a deposit that pulls nothing must fail"},{"name":"deposit_pull_exact","family":"custom","params":{},"expr":"ok and called(\"deposit\") and wide(post(\"MockToken.balanceOf\", A0) - pre(\"MockToken.balanceOf\", A0)) * 1000000000000 < arg(0) - 999999999999","why":"pulled tokens match amount18 up to scale rounding"},{"name":"deposit_mint_sync","family":"custom","params":{},"expr":"ok and called(\"deposit\") and post(\"totalSupply\") - pre(\"totalSupply\") != post(\"balanceOf\", sender) - pre(\"balanceOf\", sender)","why":"minted lp goes to depositor"},{"name":"share_price_monotone","family":"custom","params":{},"expr":"ok and pre(\"totalSupply\") > 0 and post(\"totalSupply\") > 0 and wide(post(\"MockToken.balanceOf\", A0)) * wide(pre(\"totalSupply\")) < wide(pre(\"MockToken.balanceOf\", A0)) * wide(post(\"totalSupply\"))","why":"assets per lp never drop"},{"name":"withdraw_fair","family":"fair_redemption","params":{"fn":"withdraw","shares_arg":"0","assets":"MockToken.balanceOf","shares":"totalSupply"},"expr":"","why":"fair redemption"},{"name":"withdraw_fair_custom","family":"custom","params":{},"expr":"ok and called(\"withdraw\") and wide(pre(\"MockToken.balanceOf\", A0) - post(\"MockToken.balanceOf\", A0)) * wide(pre(\"totalSupply\")) > wide(arg(0)) * wide(pre(\"MockToken.balanceOf\", A0))","why":"pays at most fraction"},{"name":"withdraw_burn","family":"exact_decrease","params":{"fn":"withdraw","value":"post(\"balanceOf\", sender)","before":"pre(\"balanceOf\", sender)","delta":"arg(0)"},"expr":"","why":"burns exactly lp"},{"name":"transfer_bound","family":"never_when","params":{"fn":"transfer","forbidden":"arg(1) > pre(\"balanceOf\", sender)"},"expr":"","why":"cannot send more than balance"},{"name":"transfer_conserves","family":"custom","params":{},"expr":"ok and called(\"transfer\") and (post_sum(\"balanceOf\") != pre_sum(\"balanceOf\") or post(\"totalSupply\") != pre(\"totalSupply\"))","why":"transfer conserves lp"},{"name":"assets_out_only_withdraw","family":"custom","params":{},"expr":"ok and post(\"MockToken.balanceOf\", A0) < pre(\"MockToken.balanceOf\", A0) and not called(\"withdraw\")","why":"assets leave only via withdraw"},{"name":"withdraw_exit","family":"exit_amount","params":{"fn":"withdraw","amount_arg":"0","balance":"balanceOf"},"expr":"","why":"holders can exit"},{"name":"no_third_party_token_loss","family":"custom","params":{},"expr":"ok and u != sender and u != A0 and post(\"MockToken.balanceOf\", u) < pre(\"MockToken.balanceOf\", u)","why":"no token loss for others"}],"invariants":[{"name":"supply_eq_sum","expr":"post(\"totalSupply\") != post_sum(\"balanceOf\")","why":"supply equals sum"},{"name":"backed","expr":"post(\"totalSupply\") > 0 and post(\"MockToken.balanceOf\", A0) == 0","why":"lp backed"}]}
+
+===== CASE R12 =====
+Contracts (the first is the one under test):
+### RewardPool
+storage: owner (address), accRewardPerShare (uint256), totalStaked (uint256), userInfo (mapping(address,struct(UserInfo)284_storage))
+functions: claim(), importLegacy(), notifyReward(uint256), stake(uint256), withdraw(uint256)
+```solidity
+contract RewardPool {
+    struct UserInfo {
+        uint256 amount;
+        uint256 rewardDebt;
+    }
+
+    uint256 private constant ACC = 1e12;
+
+    MockToken public immutable stakeToken;
+    MockToken public immutable rewardToken;
+    LegacyPool public immutable legacy;
+    address public owner;
+    uint256 public accRewardPerShare;
+    uint256 public totalStaked;
+    mapping(address => UserInfo) public userInfo;
+
+    event Staked(address indexed user, uint256 amount);
+    event Withdrawn(address indexed user, uint256 amount);
+    event Imported(address indexed user, uint256 amount);
+    event Claimed(address indexed user, uint256 amount);
+
+    constructor(MockToken _stake, MockToken _reward, LegacyPool _legacy) {
+        stakeToken = _stake;
+        rewardToken = _reward;
+        legacy = _legacy;
+        owner = msg.sender;
+    }
+
+    function notifyReward(uint256 amount) external {
+        require(msg.sender == owner, "owner");
+        require(totalStaked > 0, "no stake");
+        rewardToken.transferFrom(msg.sender, address(this), amount);
+        accRewardPerShare += amount * ACC / totalStaked;
+    }
+
+    function pending(address user) public view returns (uint256) {
+        UserInfo storage u = userInfo[user];
+        return u.amount * accRewardPerShare / ACC - u.rewardDebt;
+    }
+
+    function _harvest(address user) internal {
+        uint256 p = pending(user);
+        if (p > 0) {
+            rewardToken.transfer(user, p);
+            emit Claimed(user, p);
+        }
+    }
+
+    function stake(uint256 amount) external {
+        require(amount > 0, "zero");
+        UserInfo storage u = userInfo[msg.sender];
+        _harvest(msg.sender);
+        stakeToken.transferFrom(msg.sender, address(this), amount);
+        u.amount += amount;
+        totalStaked += amount;
+        u.rewardDebt = u.amount * accRewardPerShare / ACC;
+        emit Staked(msg.sender, amount);
+    }
+
+    function withdraw(uint256 amount) external {
+        UserInfo storage u = userInfo[msg.sender];
+        require(amount > 0 && u.amount >= amount, "amount");
+        _harvest(msg.sender);
+        u.amount -= amount;
+        totalStaked -= amount;
+        u.rewardDebt = u.amount * accRewardPerShare / ACC;
+        stakeToken.transfer(msg.sender, amount);
+        emit Withdrawn(msg.sender, amount);
+    }
+
+    function importLegacy() external {
+        uint256 amount = legacy.migrate(msg.sender);
+        require(amount > 0, "nothing");
+        UserInfo storage u = userInfo[msg.sender];
+        _harvest(msg.sender);
+        u.amount += amount;
+        totalStaked += amount;
+        u.rewardDebt = u.amount * accRewardPerShare / ACC;
+        emit Imported(msg.sender, amount);
+    }
+
+    function claim() external {
+        UserInfo storage u = userInfo[msg.sender];
+        _harvest(msg.sender);
+        u.rewardDebt = u.amount * accRewardPerShare / ACC;
+    }
+}
+```
+
+### LegacyPool
+storage: owner (address), migrator (address), balanceOf (mapping(address,uint256))
+functions: deposit(uint256), migrate(address), setMigrator(address), withdraw(uint256)
+```solidity
+contract LegacyPool {
+    MockToken public immutable stakeToken;
+    address public owner;
+    address public migrator;
+    mapping(address => uint256) public balanceOf;
+
+    constructor(MockToken _stake) {
+        stakeToken = _stake;
+        owner = msg.sender;
+    }
+
+    function setMigrator(address m) external {
+        require(msg.sender == owner, "owner");
+        migrator = m;
+    }
+
+    function deposit(uint256 amount) external {
+        stakeToken.transferFrom(msg.sender, address(this), amount);
+        balanceOf[msg.sender] += amount;
+    }
+
+    function withdraw(uint256 amount) external {
+        balanceOf[msg.sender] -= amount;
+        stakeToken.transfer(msg.sender, amount);
+    }
+
+    function migrate(address user) external returns (uint256 amount) {
+        require(msg.sender == migrator, "migrator");
+        amount = balanceOf[user];
+        balanceOf[user] = 0;
+        if (amount > 0) stakeToken.transfer(migrator, amount);
+    }
+}
+```
+
+Deployment of this case (A0 is the contract under test):
+  A0 = RewardPool
+  A1 = MockToken_STK  (an instance of MockToken; write its storage as "MockToken_STK.var")
+  A2 = MockToken_RWD  (an instance of MockToken; write its storage as "MockToken_RWD.var")
+  A3 = LegacyPool
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    LegacyPool(A3).setMigrator(A0);
+    MockToken(A1).mint(U0, 100e18);
+    vm.prank(U0); MockToken(A1).approve(A0, type(uint256).max);
+    vm.prank(U0); RewardPool(A0).stake(100e18);
+    MockToken(A2).mint(address(this), 1_000e18);
+    MockToken(A2).approve(A0, type(uint256).max);
+    RewardPool(A0).notifyReward(1_000e18);
+    MockToken(A1).mint(U1, 100e18);
+    vm.prank(U1); MockToken(A1).approve(A3, type(uint256).max);
+    vm.prank(U1); MockToken(A1).approve(A0, type(uint256).max);
+
+RULES TO REVIEW:
+{"rules":[{"name":"notify_owner","family":"never_when","params":{"fn":"notifyReward","forbidden":"sender != pre(\"owner\")"},"expr":"","why":"only owner adds rewards"},{"name":"acc_auth","family":"authorized_increase","params":{"amount":"accRewardPerShare","admin":"pre(\"owner\")"},"expr":"","why":"index only grows via owner reward"},{"name":"acc_monotone","family":"monotone","params":{"value":"post(\"accRewardPerShare\")"},"expr":"","why":"reward index only rises"},{"name":"owner_auth","family":"authorized_change","params":{"value":"post(\"owner\")","before":"pre(\"owner\")","admin":"pre(\"owner\")"},"expr":"","why":"owner protected"},{"name":"stake_ledger","family":"in_sync","params":{"a":"post(\"totalStaked\")","b":"post_sum(\"userInfo\", \"amount\")"},"expr":"","why":"total staked equals sum of stakes"},{"name":"stake_token_sync","family":"in_sync","params":{"a":"post(\"totalStaked\")","b":"post(\"MockToken_STK.balanceOf\", A0)"},"expr":"","why":"booked stake moves with held stake tokens"},{"name":"stake_resets_debt","family":"custom","params":{},"expr":"ok and called(\"stake\") and post(\"userInfo\", sender, \"rewardDebt\") != wide(post(\"userInfo\", sender, \"amount\")) * wide(post(\"accRewardPerShare\")) // 1000000000000","why":"stake checkpoints reward debt so past rewards are not re-earned"},{"name":"withdraw_resets_debt","family":"custom","params":{},"expr":"ok and called(\"withdraw\") and post(\"userInfo\", sender, \"rewardDebt\") != wide(post(\"userInfo\", sender, \"amount\")) * wide(post(\"accRewardPerShare\")) // 1000000000000","why":"withdraw checkpoints reward debt so past rewards are not re-earned"},{"name":"importLegacy_resets_debt","family":"custom","params":{},"expr":"ok and called(\"importLegacy\") and post(\"userInfo\", sender, \"rewardDebt\") != wide(post(\"userInfo\", sender, \"amount\")) * wide(post(\"accRewardPerShare\")) // 1000000000000","why":"importLegacy checkpoints reward debt so past rewards are not re-earned"},{"name":"claim_resets_debt","family":"custom","params":{},"expr":"ok and called(\"claim\") and post(\"userInfo\", sender, \"rewardDebt\") != wide(post(\"userInfo\", sender, \"amount\")) * wide(post(\"accRewardPerShare\")) // 1000000000000","why":"claim checkpoints reward debt so past rewards are not re-earned"},{"name":"harvest_bounded","family":"custom","params":{},"expr":"ok and not called(\"notifyReward\") and wide(post(\"MockToken_RWD.balanceOf\", sender) - pre(\"MockToken_RWD.balanceOf\", sender)) > wide(pre(\"userInfo\", sender, \"amount\")) * wide(pre(\"accRewardPerShare\")) // 1000000000000 - pre(\"userInfo\", sender, \"rewardDebt\")","why":"a call pays at most the caller's pending reward"},{"name":"rewards_out_only_to_sender","family":"custom","params":{},"expr":"ok and u != sender and u != A0 and post(\"MockToken_RWD.balanceOf\", u) < pre(\"MockToken_RWD.balanceOf\", u)","why":"no reward token loss for others"},{"name":"stake_token_no_third_party","family":"custom","params":{},"expr":"ok and u != sender and u != A0 and u != A3 and post(\"MockToken_STK.balanceOf\", u) < pre(\"MockToken_STK.balanceOf\", u)","why":"no stake token loss for others"},{"name":"userinfo_no_third_party","family":"custom","params":{},"expr":"ok and u != sender and post(\"userInfo\", u, \"amount\") < pre(\"userInfo\", u, \"amount\")","why":"no one loses stake in others' calls"},{"name":"legacy_no_third_party","family":"custom","params":{},"expr":"ok and u != sender and post(\"LegacyPool.balanceOf\", u) < pre(\"LegacyPool.balanceOf\", u)","why":"no one loses legacy balance in others' calls"},{"name":"stake_credit","family":"exact_effect","params":{"fn":"stake","value":"post(\"userInfo\", sender, \"amount\")","before":"pre(\"userInfo\", sender, \"amount\")","delta":"arg(0)"},"expr":"","why":"stake credits amount"},{"name":"stake_pull","family":"exact_effect","params":{"fn":"stake","value":"post(\"MockToken_STK.balanceOf\", A0)","before":"pre(\"MockToken_STK.balanceOf\", A0)","delta":"arg(0)"},"expr":"","why":"stake takes amount"},{"name":"withdraw_debit","family":"exact_decrease","params":{"fn":"withdraw","value":"post(\"userInfo\", sender, \"amount\")","before":"pre(\"userInfo\", sender, \"amount\")","delta":"arg(0)"},"expr":"","why":"withdraw debits amount"},{"name":"withdraw_pay","family":"exact_decrease","params":{"fn":"withdraw","value":"post(\"MockToken_STK.balanceOf\", A0)","before":"pre(\"MockToken_STK.balanceOf\", A0)","delta":"arg(0)"},"expr":"","why":"withdraw pays amount"},{"name":"import_matches_legacy","family":"custom","params":{},"expr":"ok and called(\"importLegacy\") and post(\"userInfo\", sender, \"amount\") - pre(\"userInfo\", sender, \"amount\") != pre(\"LegacyPool.balanceOf\", sender) - post(\"LegacyPool.balanceOf\", sender)","why":"imported stake equals migrated legacy balance"},{"name":"claim_no_stake_change","family":"custom","params":{},"expr":"ok and called(\"claim\") and (post(\"userInfo\", sender, \"amount\") != pre(\"userInfo\", sender, \"amount\") or post(\"totalStaked\") != pre(\"totalStaked\"))","why":"claim does not change stake"},{"name":"migrate_only_migrator","family":"never_when","params":{"fn":"LegacyPool.migrate","forbidden":"sender != pre(\"LegacyPool.migrator\")"},"expr":"","why":"only migrator migrates"},{"name":"withdraw_exit","family":"must_succeed","params":{"fn":"withdraw","condition":"arg(0) > 0 and arg(0) <= pre(\"userInfo\", sender, \"amount\")"},"expr":"","why":"stakers can always withdraw"},{"name":"claim_live","family":"must_succeed","params":{"fn":"claim","condition":"pre(\"userInfo\", sender, \"amount\") > 0"},"expr":"","why":"claims never get stuck"},{"name":"rwd_ledger","family":"ledger","params":{"accounts":"MockToken_RWD.balanceOf","total":"MockToken_RWD.totalSupply"},"expr":"","why":"reward token conservation"}],"invariants":[{"name":"staked_eq_sum","expr":"post(\"totalStaked\") != post_sum(\"userInfo\", \"amount\")","why":"total equals sum"},{"name":"staked_backed","expr":"post(\"totalStaked\") > post(\"MockToken_STK.balanceOf\", A0)","why":"stake tokens back stakes"},{"name":"debt_le_accrued","expr":"post(\"userInfo\", u, \"rewardDebt\") > wide(post(\"userInfo\", u, \"amount\")) * wide(post(\"accRewardPerShare\")) // 1000000000000","why":"debt never exceeds accrued"},{"name":"pending_backed","expr":"wide(post(\"userInfo\", u, \"amount\")) * wide(post(\"accRewardPerShare\")) // 1000000000000 - post(\"userInfo\", u, \"rewardDebt\") > post(\"MockToken_RWD.balanceOf\", A0)","why":"each user's pending reward is backed"}]}

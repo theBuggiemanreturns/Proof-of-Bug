@@ -1,0 +1,230 @@
+{
+ "rules": [
+  {
+   "name": "ledger",
+   "family": "ledger",
+   "params": {
+    "accounts": "balanceOf",
+    "total": "totalDeposits"
+   },
+   "expr": "",
+   "why": "balances sum to totalDeposits"
+  },
+  {
+   "name": "eth_sync",
+   "family": "in_sync",
+   "params": {
+    "a": "post(\"totalDeposits\")",
+    "b": "post(\"ETH\", A0)"
+   },
+   "expr": "",
+   "why": "booked deposits and ETH held move together"
+  },
+  {
+   "name": "eth_backed",
+   "family": "bounded_by",
+   "params": {
+    "amount": "post(\"totalDeposits\")",
+    "backing": "post(\"ETH\", A0)"
+   },
+   "expr": "",
+   "why": "deposits backed by ETH"
+  },
+  {
+   "name": "sum_backed",
+   "family": "bounded_by",
+   "params": {
+    "amount": "post_sum(\"balanceOf\")",
+    "backing": "post(\"ETH\", A0)"
+   },
+   "expr": "",
+   "why": "sum of balances backed by ETH"
+  },
+  {
+   "name": "deposit_credit_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"deposit\") and post(\"balanceOf\", sender) + pre(\"ETH\", A0) != pre(\"balanceOf\", sender) + post(\"ETH\", A0)",
+   "why": "deposit credits exactly msg.value"
+  },
+  {
+   "name": "depositfor_credit",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"depositFor\") and post(\"balanceOf\", arg(0)) + pre(\"ETH\", A0) != pre(\"balanceOf\", arg(0)) + post(\"ETH\", A0)",
+   "why": "depositFor credits beneficiary exactly msg.value"
+  },
+  {
+   "name": "deposit_nonzero",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"deposit\") or called(\"depositFor\")) and post(\"ETH\", A0) == pre(\"ETH\", A0)",
+   "why": "zero deposits rejected"
+  },
+  {
+   "name": "withdraw_debit",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and sender != U1 and post(\"balanceOf\", sender) + arg(0) != pre(\"balanceOf\", sender)",
+   "why": "withdraw debits caller by amount"
+  },
+  {
+   "name": "withdraw_eth_bound",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"withdraw\") or called(\"withdrawAll\")) and post(\"ETH\", sender) > pre(\"ETH\", sender) + pre(\"balanceOf\", sender)",
+   "why": "never receive more ETH than balance"
+  },
+  {
+   "name": "withdraw_eth_out",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and sender != U1 and post(\"ETH\", A0) + arg(0) != pre(\"ETH\", A0)",
+   "why": "withdraw sends exactly amount"
+  },
+  {
+   "name": "withdrawall_eth_out",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdrawAll\") and sender != U1 and post(\"ETH\", A0) + pre(\"balanceOf\", sender) != pre(\"ETH\", A0)",
+   "why": "withdrawAll sends exactly balance"
+  },
+  {
+   "name": "withdrawall_zero",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdrawAll\") and sender != U1 and post(\"balanceOf\", sender) != 0",
+   "why": "withdrawAll empties the balance"
+  },
+  {
+   "name": "withdraw_limit",
+   "family": "never_when",
+   "params": {
+    "fn": "withdraw",
+    "forbidden": "arg(0) > pre(\"balanceOf\", sender)"
+   },
+   "expr": "",
+   "why": "cannot withdraw more than balance"
+  },
+  {
+   "name": "withdrawall_empty",
+   "family": "never_when",
+   "params": {
+    "fn": "withdrawAll",
+    "forbidden": "pre(\"balanceOf\", sender) == 0"
+   },
+   "expr": "",
+   "why": "empty account cannot withdrawAll"
+  },
+  {
+   "name": "loss_allowance",
+   "family": "no_loss_beyond_allowance",
+   "params": {
+    "balance": "balanceOf",
+    "allowance": "allowance"
+   },
+   "expr": "",
+   "why": "others take only approved"
+  },
+  {
+   "name": "loss_custom",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and post(\"balanceOf\", u) < pre(\"balanceOf\", u) and pre(\"balanceOf\", u) > post(\"balanceOf\", u) + pre(\"allowance\", u, sender)",
+   "why": "no loss beyond allowance"
+  },
+  {
+   "name": "transferfrom_allowance",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"transferFrom\") and pre(\"allowance\", arg(0), sender) != 115792089237316195423570985008687907853269984665640564039457584007913129639935 and post(\"allowance\", arg(0), sender) + arg(2) != pre(\"allowance\", arg(0), sender)",
+   "why": "transferFrom spends exactly amount"
+  },
+  {
+   "name": "tf_allowance_family",
+   "family": "allowance_spent",
+   "params": {
+    "fn": "transferFrom",
+    "allowance": "allowance",
+    "owner_arg": "0",
+    "amount_arg": "2"
+   },
+   "expr": "",
+   "why": "allowance used up"
+  },
+  {
+   "name": "tf_needs_allowance",
+   "family": "never_when",
+   "params": {
+    "fn": "transferFrom",
+    "forbidden": "pre(\"allowance\", arg(0), sender) < arg(2)"
+   },
+   "expr": "",
+   "why": "cannot exceed allowance"
+  },
+  {
+   "name": "transfer_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"transfer\") and arg(0) != sender and (post(\"balanceOf\", sender) + arg(1) != pre(\"balanceOf\", sender) or post(\"balanceOf\", arg(0)) != pre(\"balanceOf\", arg(0)) + arg(1))",
+   "why": "transfer moves exactly amount"
+  },
+  {
+   "name": "transfers_no_eth",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"transfer\") or called(\"transferFrom\") or called(\"approve\")) and (post(\"ETH\", A0) != pre(\"ETH\", A0) or post(\"totalDeposits\") != pre(\"totalDeposits\"))",
+   "why": "internal transfers do not move ETH or total"
+  },
+  {
+   "name": "approve_sets",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"approve\") and post(\"allowance\", sender, arg(0)) != arg(1)",
+   "why": "approve sets allowance"
+  },
+  {
+   "name": "exit_all",
+   "family": "exit_all",
+   "params": {
+    "fn": "withdrawAll",
+    "balance": "balanceOf"
+   },
+   "expr": "",
+   "why": "depositor can always withdraw everything"
+  },
+  {
+   "name": "exit_amount",
+   "family": "exit_amount",
+   "params": {
+    "fn": "withdraw",
+    "amount_arg": "0",
+    "balance": "balanceOf"
+   },
+   "expr": "",
+   "why": "depositor can withdraw part"
+  }
+ ],
+ "invariants": [
+  {
+   "name": "ledger",
+   "expr": "post_sum(\"balanceOf\") != post(\"totalDeposits\")",
+   "why": "sum of balances is totalDeposits"
+  },
+  {
+   "name": "solvent",
+   "expr": "post(\"totalDeposits\") > post(\"ETH\", A0)",
+   "why": "ETH covers deposits"
+  },
+  {
+   "name": "solvent_sum",
+   "expr": "post_sum(\"balanceOf\") > post(\"ETH\", A0)",
+   "why": "ETH covers balances"
+  },
+  {
+   "name": "unlocked",
+   "expr": "post(\"status\") != 1",
+   "why": "reentrancy lock released"
+  }
+ ]
+}

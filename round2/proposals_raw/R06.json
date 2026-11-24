@@ -1,0 +1,200 @@
+{
+ "rules": [
+  {
+   "name": "setRebalancer_owner",
+   "family": "never_when",
+   "params": {
+    "fn": "setRebalancer",
+    "forbidden": "sender != pre(\"owner\") or arg(0) == 0"
+   },
+   "expr": "",
+   "why": "only owner sets rebalancer"
+  },
+  {
+   "name": "rebalancer_auth",
+   "family": "authorized_change",
+   "params": {
+    "value": "post(\"rebalancer\")",
+    "before": "pre(\"rebalancer\")",
+    "admin": "pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "rebalancer protected"
+  },
+  {
+   "name": "owner_auth",
+   "family": "authorized_change",
+   "params": {
+    "value": "post(\"owner\")",
+    "before": "pre(\"owner\")",
+    "admin": "pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "owner protected"
+  },
+  {
+   "name": "rebalance_only_current",
+   "family": "never_when",
+   "params": {
+    "fn": "rebalance",
+    "forbidden": "sender != pre(\"rebalancer\")"
+   },
+   "expr": "",
+   "why": "only the current rebalancer may move funds; replaced rebalancers lose the role"
+  },
+  {
+   "name": "role_auth",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and post(\"hasRebalanceRole\", u) != pre(\"hasRebalanceRole\", u) and sender != pre(\"owner\")",
+   "why": "roles only change by owner"
+  },
+  {
+   "name": "rebalance_sync",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"rebalance\") and post(\"deployedTo\", arg(0)) - pre(\"deployedTo\", arg(0)) != pre(\"MockToken.balanceOf\", A0) - post(\"MockToken.balanceOf\", A0)",
+   "why": "deployed amount booked equals what left"
+  },
+  {
+   "name": "deployed_only_rebalance",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and not called(\"rebalance\") and post(\"deployedTo\", u) != pre(\"deployedTo\", u)",
+   "why": "deployedTo only via rebalance"
+  },
+  {
+   "name": "shares_ledger",
+   "family": "ledger",
+   "params": {
+    "accounts": "sharesOf",
+    "total": "totalShares"
+   },
+   "expr": "",
+   "why": "shares sum to total"
+  },
+  {
+   "name": "no_third_party",
+   "family": "no_third_party_loss",
+   "params": {
+    "balance": "sharesOf"
+   },
+   "expr": "",
+   "why": "no one loses shares in others' calls"
+  },
+  {
+   "name": "deposit_nonzero",
+   "family": "nonzero_mint",
+   "params": {
+    "fn": "deposit",
+    "amount_arg": "0"
+   },
+   "expr": "",
+   "why": "deposit always mints shares"
+  },
+  {
+   "name": "deposit_pull",
+   "family": "exact_effect",
+   "params": {
+    "fn": "deposit",
+    "value": "post(\"MockToken.balanceOf\", A0)",
+    "before": "pre(\"MockToken.balanceOf\", A0)",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "deposit takes amount"
+  },
+  {
+   "name": "deposit_fair",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"deposit\") and pre(\"totalShares\") > 0 and wide(post(\"sharesOf\", sender) - pre(\"sharesOf\", sender)) * wide(pre(\"MockToken.balanceOf\", A0)) > wide(arg(0)) * wide(pre(\"totalShares\"))",
+   "why": "deposit mints at most fair shares"
+  },
+  {
+   "name": "withdraw_burn",
+   "family": "exact_decrease",
+   "params": {
+    "fn": "withdraw",
+    "value": "post(\"sharesOf\", sender)",
+    "before": "pre(\"sharesOf\", sender)",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "burns exactly shares"
+  },
+  {
+   "name": "withdraw_fair",
+   "family": "fair_redemption",
+   "params": {
+    "fn": "withdraw",
+    "shares_arg": "0",
+    "assets": "MockToken.balanceOf",
+    "shares": "totalShares"
+   },
+   "expr": "",
+   "why": "fair redemption"
+  },
+  {
+   "name": "withdraw_fair_custom",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and wide(pre(\"MockToken.balanceOf\", A0) - post(\"MockToken.balanceOf\", A0)) * wide(pre(\"totalShares\")) > wide(arg(0)) * wide(pre(\"MockToken.balanceOf\", A0))",
+   "why": "pays at most fraction"
+  },
+  {
+   "name": "share_price_user_paths",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"deposit\") or called(\"withdraw\")) and pre(\"totalShares\") > 0 and post(\"totalShares\") > 0 and wide(post(\"MockToken.balanceOf\", A0)) * wide(pre(\"totalShares\")) < wide(pre(\"MockToken.balanceOf\", A0)) * wide(post(\"totalShares\"))",
+   "why": "deposits/withdrawals never dilute holders"
+  },
+  {
+   "name": "assets_out_paths",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and post(\"MockToken.balanceOf\", A0) < pre(\"MockToken.balanceOf\", A0) and not called(\"withdraw\") and not called(\"rebalance\")",
+   "why": "assets leave only via withdraw/rebalance"
+  },
+  {
+   "name": "rebalance_no_share_change",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"rebalance\") and post(\"totalShares\") != pre(\"totalShares\")",
+   "why": "rebalance leaves shares"
+  },
+  {
+   "name": "withdraw_exit",
+   "family": "exit_amount",
+   "params": {
+    "fn": "withdraw",
+    "amount_arg": "0",
+    "balance": "sharesOf"
+   },
+   "expr": "",
+   "why": "holders can exit"
+  },
+  {
+   "name": "token_ledger",
+   "family": "ledger",
+   "params": {
+    "accounts": "MockToken.balanceOf",
+    "total": "MockToken.totalSupply"
+   },
+   "expr": "",
+   "why": "token conservation"
+  }
+ ],
+ "invariants": [
+  {
+   "name": "single_rebalancer",
+   "expr": "post(\"hasRebalanceRole\", u) != 0 and u != post(\"rebalancer\")",
+   "why": "only the current rebalancer holds the role"
+  },
+  {
+   "name": "shares_eq_sum",
+   "expr": "post(\"totalShares\") != post_sum(\"sharesOf\")",
+   "why": "total equals sum"
+  }
+ ]
+}

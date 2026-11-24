@@ -1,0 +1,206 @@
+{
+ "rules": [
+  {
+   "name": "withdraw_locked",
+   "family": "never_when",
+   "params": {
+    "fn": "withdraw",
+    "forbidden": "now < pre(\"deposits\", arg(0), \"unlockAt\")"
+   },
+   "expr": "",
+   "why": "no withdrawal before unlock"
+  },
+  {
+   "name": "withdraw_only_owner",
+   "family": "never_when",
+   "params": {
+    "fn": "withdraw",
+    "forbidden": "sender != pre(\"deposits\", arg(0), \"owner\")"
+   },
+   "expr": "",
+   "why": "only owner withdraws"
+  },
+  {
+   "name": "withdraw_empty",
+   "family": "never_when",
+   "params": {
+    "fn": "withdraw",
+    "forbidden": "pre(\"deposits\", arg(0), \"amount\") == 0"
+   },
+   "expr": "",
+   "why": "no double withdrawal"
+  },
+  {
+   "name": "topUp_only_owner",
+   "family": "never_when",
+   "params": {
+    "fn": "topUp",
+    "forbidden": "sender != pre(\"deposits\", arg(0), \"owner\")"
+   },
+   "expr": "",
+   "why": "only owner tops up"
+  },
+  {
+   "name": "topUp_closed",
+   "family": "never_when",
+   "params": {
+    "fn": "topUp",
+    "forbidden": "pre(\"deposits\", arg(0), \"amount\") == 0"
+   },
+   "expr": "",
+   "why": "closed deposits cannot be topped up"
+  },
+  {
+   "name": "extend_only_owner",
+   "family": "never_when",
+   "params": {
+    "fn": "extend",
+    "forbidden": "sender != pre(\"deposits\", arg(0), \"owner\")"
+   },
+   "expr": "",
+   "why": "only owner extends"
+  },
+  {
+   "name": "extend_not_earlier",
+   "family": "never_when",
+   "params": {
+    "fn": "extend",
+    "forbidden": "arg(1) <= pre(\"deposits\", arg(0), \"unlockAt\") or arg(1) > now + 31536000"
+   },
+   "expr": "",
+   "why": "extend only later, at most MAX_DELAY ahead"
+  },
+  {
+   "name": "move_only_owner",
+   "family": "never_when",
+   "params": {
+    "fn": "moveOwnership",
+    "forbidden": "sender != pre(\"deposits\", arg(0), \"owner\") or arg(1) == 0"
+   },
+   "expr": "",
+   "why": "only owner moves ownership, never to zero"
+  },
+  {
+   "name": "deposit_delay_bounds",
+   "family": "never_when",
+   "params": {
+    "fn": "deposit",
+    "forbidden": "arg(0) < 86400 or arg(0) > 31536000"
+   },
+   "expr": "",
+   "why": "delay within MIN/MAX"
+  },
+  {
+   "name": "totalLocked_ledger",
+   "family": "in_sync",
+   "params": {
+    "a": "post(\"totalLocked\")",
+    "b": "post_sum(\"deposits\", \"amount\")"
+   },
+   "expr": "",
+   "why": "total equals sum of deposits"
+  },
+  {
+   "name": "totalLocked_eth_sync",
+   "family": "in_sync",
+   "params": {
+    "a": "post(\"totalLocked\")",
+    "b": "post(\"ETH\", A0)"
+   },
+   "expr": "",
+   "why": "booked total moves with held ETH"
+  },
+  {
+   "name": "nextId_monotone",
+   "family": "monotone",
+   "params": {
+    "value": "post(\"nextId\")"
+   },
+   "expr": "",
+   "why": "ids never reused"
+  },
+  {
+   "name": "unlock_never_earlier",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and pre(\"deposits\", arg(0), \"amount\") > 0 and post(\"deposits\", arg(0), \"unlockAt\") < pre(\"deposits\", arg(0), \"unlockAt\")",
+   "why": "unlock time only moves later"
+  },
+  {
+   "name": "deposit_record",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"deposit\") and (post(\"deposits\", pre(\"nextId\"), \"owner\") != sender or post(\"deposits\", pre(\"nextId\"), \"amount\") != post(\"ETH\", A0) - pre(\"ETH\", A0) or post(\"deposits\", pre(\"nextId\"), \"unlockAt\") != now + arg(0))",
+   "why": "deposit records caller, value and unlock time"
+  },
+  {
+   "name": "topUp_sync",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"topUp\") and post(\"deposits\", arg(0), \"amount\") - pre(\"deposits\", arg(0), \"amount\") != post(\"totalLocked\") - pre(\"totalLocked\")",
+   "why": "topUp adds same to deposit and total"
+  },
+  {
+   "name": "withdraw_zeroes",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and post(\"deposits\", arg(0), \"amount\") != 0",
+   "why": "withdraw empties the deposit"
+  },
+  {
+   "name": "extend_no_side_effect",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"extend\") and (post(\"deposits\", arg(0), \"amount\") != pre(\"deposits\", arg(0), \"amount\") or post(\"deposits\", arg(0), \"owner\") != pre(\"deposits\", arg(0), \"owner\") or post(\"totalLocked\") != pre(\"totalLocked\"))",
+   "why": "extend only changes unlockAt"
+  },
+  {
+   "name": "move_no_side_effect",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"moveOwnership\") and (post(\"deposits\", arg(0), \"amount\") != pre(\"deposits\", arg(0), \"amount\") or post(\"deposits\", arg(0), \"unlockAt\") != pre(\"deposits\", arg(0), \"unlockAt\") or post(\"totalLocked\") != pre(\"totalLocked\"))",
+   "why": "moveOwnership only changes owner"
+  },
+  {
+   "name": "eth_out_only_withdraw",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and post(\"ETH\", A0) < pre(\"ETH\", A0) and not called(\"withdraw\")",
+   "why": "ETH leaves only through withdraw"
+  },
+  {
+   "name": "withdraw_pays_at_most_amount",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and pre(\"ETH\", A0) - post(\"ETH\", A0) > pre(\"deposits\", arg(0), \"amount\")",
+   "why": "withdraw pays out no more than the deposit"
+  },
+  {
+   "name": "withdraw_exit",
+   "family": "must_succeed",
+   "params": {
+    "fn": "withdraw",
+    "condition": "sender == U0 and sender == pre(\"deposits\", arg(0), \"owner\") and now >= pre(\"deposits\", arg(0), \"unlockAt\") and pre(\"deposits\", arg(0), \"amount\") > 0"
+   },
+   "expr": "",
+   "why": "unlocked owner can always withdraw"
+  }
+ ],
+ "invariants": [
+  {
+   "name": "eth_backs_total",
+   "expr": "post(\"ETH\", A0) < post(\"totalLocked\")",
+   "why": "held ETH covers locked total"
+  },
+  {
+   "name": "total_eq_sum",
+   "expr": "post(\"totalLocked\") != post_sum(\"deposits\", \"amount\")",
+   "why": "total equals sum of deposits"
+  },
+  {
+   "name": "open_has_owner",
+   "expr": "post(\"deposits\", u, \"amount\") > 0 and post(\"deposits\", u, \"owner\") == 0",
+   "why": "open deposits have an owner"
+  }
+ ]
+}

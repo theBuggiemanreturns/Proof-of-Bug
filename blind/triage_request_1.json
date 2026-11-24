@@ -1,0 +1,129 @@
+{
+ "C01": [
+  {
+   "rule": "transfer_exact",
+   "rule_text": "ok and called(\"transfer\") and arg(0) != sender and (post(\"balanceOf\", sender) + arg(0) != pre(\"balanceOf\", sender) or post(\"balanceOf\", arg(0)) != pre(\"balanceOf\", arg(0)) + arg(0))",
+   "confirmed_on_evm": true,
+   "attack": [
+    "transfer(0, 0) from 0x32",
+    "transfer(0, 0) from 0x32",
+    "transfer(49, 0) from 0x32"
+   ],
+   "reverted_steps": []
+  },
+  {
+   "rule": "deposit_nonzero",
+   "rule_text": "called(\"deposit\") and ok and arg(0) > 0 and ret == 0",
+   "confirmed_on_evm": true,
+   "attack": [
+    "deposit(20, 49) from 0x32",
+    "redeem(4, 153, 49) from 0x31",
+    "deposit(1, 49) from 0x32"
+   ],
+   "reverted_steps": []
+  }
+ ],
+ "C03": [
+  {
+   "rule": "ledger",
+   "rule_text": "ok and post_sum(\"balanceOf\") != post(\"totalDeposits\")",
+   "confirmed_on_evm": true,
+   "attack": [
+    "depositFor(49) from 0x32 sending 52 wei",
+    "transfer(50, 49) from 0x31",
+    "withdrawAll() from 0x32 [attacker calls back transfer(49, 40)]"
+   ],
+   "reverted_steps": []
+  },
+  {
+   "rule": "sum_backed",
+   "rule_text": "ok and post_sum(\"balanceOf\") > post(\"ETH\", A0)",
+   "confirmed_on_evm": true,
+   "attack": [
+    "depositFor(50) from 0x31 sending 1 wei [attacker calls back withdraw(4)]",
+    "withdrawAll() from 0x32 [attacker calls back transfer(0, 1)]"
+   ],
+   "reverted_steps": []
+  },
+  {
+   "rule": "exit_all",
+   "rule_text": "called(\"withdrawAll\") and reverted and pre(\"balanceOf\", sender) > 0",
+   "confirmed_on_evm": true,
+   "attack": [
+    "deposit() from 0x32 sending 2 wei",
+    "withdrawAll() from 0x32 [attacker calls back transfer(49, 2)]",
+    "withdrawAll() from 0x31 [attacker calls back transfer(70, 0)]"
+   ],
+   "reverted_steps": [
+    2
+   ]
+  },
+  {
+   "rule": "exit_amount",
+   "rule_text": "called(\"withdraw\") and reverted and arg(0) > 0 and arg(0) <= pre(\"balanceOf\", sender)",
+   "confirmed_on_evm": true,
+   "attack": [
+    "depositFor(50) from 0x31 sending 26 wei",
+    "withdrawAll() from 0x32 [attacker calls back transfer(49, 4)]",
+    "withdraw(1) from 0x31"
+   ],
+   "reverted_steps": [
+    2
+   ]
+  }
+ ],
+ "C07": [
+  {
+   "rule": "modify_auth",
+   "rule_text": "called(\"modify\") and ok and (sender != pre(\"orders\", arg(0), \"maker\") or pre(\"orders\", arg(0), \"active\") == 0 or arg(1) == 0 or arg(2) == 0)",
+   "confirmed_on_evm": true,
+   "attack": [
+    "place(94, 4611686018427387231) from 0x32",
+    "cancel(1) from 0x32",
+    "modify(1, 127, 4611686018427387903) from 0x32"
+   ],
+   "reverted_steps": []
+  },
+  {
+   "rule": "cancelled_no_refund_again",
+   "rule_text": "ok and (called(\"cancel\") or called(\"modify\")) and pre(\"orders\", arg(0), \"active\") == 0",
+   "confirmed_on_evm": true,
+   "attack": [
+    "place(1, 1) from 0x32",
+    "cancel(1) from 0x32",
+    "modify(1, 63, 4611686018427387903) from 0x32"
+   ],
+   "reverted_steps": []
+  },
+  {
+   "rule": "quote_never_held",
+   "rule_text": "ok and post(\"TokenC07_QUOTE.balanceOf\", A0) != pre(\"TokenC07_QUOTE.balanceOf\", A0)",
+   "confirmed_on_evm": true,
+   "attack": [
+    "place(4611686018427387891, 4611686018427387903) from 0x32",
+    "TokenC07_BASE.transferFrom(7, 4611686018427387903, 4611686018427387903) from 0x32",
+    "TokenC07_QUOTE.transfer(153, 32) from 0x31"
+   ],
+   "reverted_steps": [
+    0,
+    1
+   ]
+  }
+ ],
+ "C09": [
+  {
+   "rule": "deposit_works",
+   "rule_text": "called(\"deposit\") and reverted and (arg(0) > 0 and arg(0) <= pre(\"TokenC09.balanceOf\", sender) and arg(0) <= 1000000000 and (arg(0) * (pre(\"totalSupply\") + 1000000)) // (pre(\"TokenC09.balanceOf\", A0) + 1) > 0 and sender != A0)",
+   "confirmed_on_evm": true,
+   "attack": [
+    "TokenC09.approve(153, 0) from 0x32",
+    "TokenC09.mint(4194303, 4194303) from 0x32",
+    "deposit(1, 4194303) from 0x32"
+   ],
+   "reverted_steps": [
+    1,
+    2
+   ]
+  }
+ ]
+}

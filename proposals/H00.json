@@ -1,0 +1,81 @@
+{
+ "rules": [
+  {
+   "name": "no_mint",
+   "family": "bounded_by",
+   "params": {
+    "amount": "post_sum(\"credit\")",
+    "backing": "post(\"totalPaid\")"
+   },
+   "expr": "",
+   "why": "credits never exceed payments"
+  },
+  {
+   "name": "conserved",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"fill\") and ok and post_sum(\"credit\") + pre(\"totalPaid\") != pre_sum(\"credit\") + post(\"totalPaid\")",
+   "why": "a fill credits exactly what it charges"
+  },
+  {
+   "name": "fill_clears",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"fill\") and ok and post(\"offer\", arg(0)) != 0",
+   "why": "a filled offer is used up"
+  },
+  {
+   "name": "fill_clears_b",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"fill\") and ok and post(\"offer\", arg(1)) != 0",
+   "why": "both filled offers are used up"
+  },
+  {
+   "name": "place_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"place\") and ok and post(\"offer\", sender) != arg(0)",
+   "why": "placing records exactly the amount"
+  },
+  {
+   "name": "place_no_pay",
+   "family": "no_side_effect",
+   "params": {
+    "fn": "place",
+    "value": "post(\"totalPaid\")",
+    "before": "pre(\"totalPaid\")"
+   },
+   "expr": "",
+   "why": "placing charges nobody"
+  },
+  {
+   "name": "place_no_credit",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"place\") and ok and post_sum(\"credit\") != pre_sum(\"credit\")",
+   "why": "placing credits nobody"
+  },
+  {
+   "name": "place_works",
+   "family": "must_succeed",
+   "params": {
+    "fn": "place",
+    "condition": "arg(0) > 0 and arg(0) <= 100 and pre(\"offer\", sender) == 0"
+   },
+   "expr": "",
+   "why": "a valid offer can always be placed"
+  },
+  {
+   "name": "fill_works",
+   "family": "must_succeed",
+   "params": {
+    "fn": "fill",
+    "condition": "pre(\"offer\", arg(0)) + pre(\"offer\", arg(1)) < 128"
+   },
+   "expr": "",
+   "why": "a fill whose offers fit is never blocked"
+  }
+ ],
+ "invariants": []
+}

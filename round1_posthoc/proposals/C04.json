@@ -1,0 +1,251 @@
+{
+ "rules": [
+  {
+   "name": "supply_ledger",
+   "family": "ledger",
+   "params": {
+    "accounts": "supplied",
+    "total": "totalSupplied"
+   },
+   "expr": "",
+   "why": "supplied sums to totalSupplied"
+  },
+  {
+   "name": "debt_ledger",
+   "family": "ledger",
+   "params": {
+    "accounts": "debtOf",
+    "total": "totalBorrowed"
+   },
+   "expr": "",
+   "why": "debt sums to totalBorrowed"
+  },
+  {
+   "name": "collateral_backed",
+   "family": "bounded_by",
+   "params": {
+    "amount": "post_sum(\"collateralOf\")",
+    "backing": "post(\"TokenC04_GCOL.balanceOf\", A0)"
+   },
+   "expr": "",
+   "why": "booked collateral is held"
+  },
+  {
+   "name": "supply_backed",
+   "family": "bounded_by",
+   "params": {
+    "amount": "post(\"totalSupplied\")",
+    "backing": "post(\"TokenC04_USDS.balanceOf\", A0) + post(\"totalBorrowed\")"
+   },
+   "expr": "",
+   "why": "suppliers backed by cash plus loans"
+  },
+  {
+   "name": "borrow_healthy",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"borrow\") and post(\"debtOf\", sender) > (((post(\"collateralOf\", sender) * ((post(\"AmmC04.reserve0\") * 1000000000000000000) // post(\"AmmC04.reserve1\"))) // 1000000000000000000) * 7500) // 10000",
+   "why": "borrow stays within LTV"
+  },
+  {
+   "name": "withdrawcol_healthy",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdrawCollateral\") and post(\"debtOf\", sender) > (((post(\"collateralOf\", sender) * ((post(\"AmmC04.reserve0\") * 1000000000000000000) // post(\"AmmC04.reserve1\"))) // 1000000000000000000) * 7500) // 10000",
+   "why": "withdrawing collateral keeps LTV"
+  },
+  {
+   "name": "liq_only_unhealthy",
+   "family": "never_when",
+   "params": {
+    "fn": "liquidate",
+    "forbidden": "pre(\"debtOf\", arg(0)) * 10000 <= ((pre(\"collateralOf\", arg(0)) * ((pre(\"AmmC04.reserve0\") * 1000000000000000000) // pre(\"AmmC04.reserve1\"))) // 1000000000000000000) * 8000"
+   },
+   "expr": "",
+   "why": "healthy accounts cannot be liquidated"
+  },
+  {
+   "name": "liq_close_factor",
+   "family": "never_when",
+   "params": {
+    "fn": "liquidate",
+    "forbidden": "arg(1) == 0 or arg(1) > pre(\"debtOf\", arg(0)) // 2"
+   },
+   "expr": "",
+   "why": "at most half the debt per liquidation"
+  },
+  {
+   "name": "liq_seize_bound",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"liquidate\") and pre(\"collateralOf\", arg(0)) > post(\"collateralOf\", arg(0)) + (((arg(1) * 1000000000000000000) // ((pre(\"AmmC04.reserve0\") * 1000000000000000000) // pre(\"AmmC04.reserve1\"))) * 10500) // 10000",
+   "why": "seized collateral <= repaid value plus 5% bonus"
+  },
+  {
+   "name": "liq_debt_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"liquidate\") and (post(\"debtOf\", arg(0)) + arg(1) != pre(\"debtOf\", arg(0)) or post(\"totalBorrowed\") + arg(1) != pre(\"totalBorrowed\"))",
+   "why": "liquidation reduces debt by exactly repayAmount"
+  },
+  {
+   "name": "liq_pays",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"liquidate\") and post(\"TokenC04_USDS.balanceOf\", A0) != pre(\"TokenC04_USDS.balanceOf\", A0) + arg(1)",
+   "why": "liquidator pays repayAmount"
+  },
+  {
+   "name": "liq_col_out",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"liquidate\") and sender != A0 and pre(\"collateralOf\", arg(0)) + pre(\"TokenC04_GCOL.balanceOf\", sender) != post(\"collateralOf\", arg(0)) + post(\"TokenC04_GCOL.balanceOf\", sender)",
+   "why": "seized collateral goes to liquidator"
+  },
+  {
+   "name": "supply_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"supply\") and (post(\"supplied\", sender) != pre(\"supplied\", sender) + arg(0) or post(\"totalSupplied\") != pre(\"totalSupplied\") + arg(0) or post(\"TokenC04_USDS.balanceOf\", A0) != pre(\"TokenC04_USDS.balanceOf\", A0) + arg(0))",
+   "why": "supply books exactly amount"
+  },
+  {
+   "name": "withdrawsupply_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdrawSupply\") and (post(\"supplied\", sender) + arg(0) != pre(\"supplied\", sender) or post(\"totalSupplied\") + arg(0) != pre(\"totalSupplied\") or post(\"TokenC04_USDS.balanceOf\", A0) + arg(0) != pre(\"TokenC04_USDS.balanceOf\", A0))",
+   "why": "withdrawSupply exact"
+  },
+  {
+   "name": "withdrawsupply_limit",
+   "family": "never_when",
+   "params": {
+    "fn": "withdrawSupply",
+    "forbidden": "arg(0) > pre(\"supplied\", sender)"
+   },
+   "expr": "",
+   "why": "cannot withdraw more than supplied"
+  },
+  {
+   "name": "depositcol_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"depositCollateral\") and (post(\"collateralOf\", sender) != pre(\"collateralOf\", sender) + arg(0) or post(\"TokenC04_GCOL.balanceOf\", A0) != pre(\"TokenC04_GCOL.balanceOf\", A0) + arg(0))",
+   "why": "collateral deposit exact"
+  },
+  {
+   "name": "withdrawcol_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdrawCollateral\") and (post(\"collateralOf\", sender) + arg(0) != pre(\"collateralOf\", sender) or post(\"TokenC04_GCOL.balanceOf\", A0) + arg(0) != pre(\"TokenC04_GCOL.balanceOf\", A0))",
+   "why": "collateral withdraw exact"
+  },
+  {
+   "name": "withdrawcol_limit",
+   "family": "never_when",
+   "params": {
+    "fn": "withdrawCollateral",
+    "forbidden": "arg(0) > pre(\"collateralOf\", sender)"
+   },
+   "expr": "",
+   "why": "cannot withdraw more collateral than owned"
+  },
+  {
+   "name": "borrow_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"borrow\") and (post(\"debtOf\", sender) != pre(\"debtOf\", sender) + arg(0) or post(\"totalBorrowed\") != pre(\"totalBorrowed\") + arg(0) or post(\"TokenC04_USDS.balanceOf\", A0) + arg(0) != pre(\"TokenC04_USDS.balanceOf\", A0))",
+   "why": "borrow books exact debt"
+  },
+  {
+   "name": "repay_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"repay\") and arg(1) <= pre(\"debtOf\", arg(0)) and (post(\"debtOf\", arg(0)) + arg(1) != pre(\"debtOf\", arg(0)) or post(\"totalBorrowed\") + arg(1) != pre(\"totalBorrowed\") or post(\"TokenC04_USDS.balanceOf\", A0) != pre(\"TokenC04_USDS.balanceOf\", A0) + arg(1))",
+   "why": "repay reduces debt exactly"
+  },
+  {
+   "name": "repay_capped",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"repay\") and arg(1) > pre(\"debtOf\", arg(0)) and (post(\"debtOf\", arg(0)) != 0 or post(\"TokenC04_USDS.balanceOf\", A0) != pre(\"TokenC04_USDS.balanceOf\", A0) + pre(\"debtOf\", arg(0)))",
+   "why": "overpaying repay is capped at debt"
+  },
+  {
+   "name": "repay_no_collateral_change",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"repay\") and post(\"collateralOf\", u) != pre(\"collateralOf\", u)",
+   "why": "repay leaves collateral"
+  },
+  {
+   "name": "debt_third_party",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and post(\"debtOf\", u) > pre(\"debtOf\", u)",
+   "why": "nobody gets debt from others' calls"
+  },
+  {
+   "name": "supplied_third_party",
+   "family": "no_third_party_loss",
+   "params": {
+    "balance": "supplied"
+   },
+   "expr": "",
+   "why": "nobody loses supply in others' calls"
+  },
+  {
+   "name": "collateral_third_party",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and not called(\"liquidate\") and post(\"collateralOf\", u) < pre(\"collateralOf\", u)",
+   "why": "only liquidation touches others' collateral"
+  },
+  {
+   "name": "liq_only_target",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"liquidate\") and u != arg(0) and u != sender and post(\"collateralOf\", u) != pre(\"collateralOf\", u)",
+   "why": "liquidation only touches the target"
+  },
+  {
+   "name": "tokens_third_party",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"supply\") or called(\"withdrawSupply\") or called(\"depositCollateral\") or called(\"withdrawCollateral\") or called(\"borrow\") or called(\"repay\") or called(\"liquidate\")) and u != sender and u != A0 and u != A3 and (post(\"TokenC04_USDS.balanceOf\", u) < pre(\"TokenC04_USDS.balanceOf\", u) or post(\"TokenC04_GCOL.balanceOf\", u) < pre(\"TokenC04_GCOL.balanceOf\", u))",
+   "why": "lending calls never take tokens from non-callers"
+  },
+  {
+   "name": "withdrawcol_debtfree",
+   "family": "must_succeed",
+   "params": {
+    "fn": "withdrawCollateral",
+    "condition": "pre(\"debtOf\", sender) == 0 and arg(0) <= pre(\"collateralOf\", sender) and sender != A0"
+   },
+   "expr": "",
+   "why": "debt-free user can withdraw collateral"
+  }
+ ],
+ "invariants": [
+  {
+   "name": "supply_ledger",
+   "expr": "post_sum(\"supplied\") != post(\"totalSupplied\")",
+   "why": "supply sum"
+  },
+  {
+   "name": "debt_ledger",
+   "expr": "post_sum(\"debtOf\") != post(\"totalBorrowed\")",
+   "why": "debt sum"
+  },
+  {
+   "name": "collateral_held",
+   "expr": "post_sum(\"collateralOf\") > post(\"TokenC04_GCOL.balanceOf\", A0)",
+   "why": "collateral held"
+  },
+  {
+   "name": "cash_plus_loans",
+   "expr": "post(\"totalSupplied\") > post(\"TokenC04_USDS.balanceOf\", A0) + post(\"totalBorrowed\")",
+   "why": "supply backed"
+  }
+ ]
+}

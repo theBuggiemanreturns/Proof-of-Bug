@@ -1,0 +1,25 @@
+{
+ "case": "B02",
+ "rules": {
+  "ledger": "ok and post_sum(\"shares\") != post(\"totalSupply\")",
+  "nonzero": "called(\"deposit\") and ok and arg(0) > 0 and ret == 0",
+  "fair_out": "called(\"withdraw\") and ok and wide(ret) * pre(\"totalSupply\") > wide(arg(0)) * pre(\"totalAssets\")",
+  "dep_supply": "called(\"deposit\") and ok and post(\"totalSupply\") != pre(\"totalSupply\") + ret",
+  "wd_assets": "called(\"withdraw\") and ok and post(\"totalAssets\") + ret != pre(\"totalAssets\")",
+  "don_assets": "called(\"donate\") and ok and post(\"totalAssets\") != pre(\"totalAssets\") + arg(0)",
+  "dep_assets": "called(\"deposit\") and ok and post(\"totalAssets\") != pre(\"totalAssets\") + arg(0)",
+  "wd_supply": "called(\"withdraw\") and ok and post(\"totalSupply\") + arg(0) != pre(\"totalSupply\")",
+  "exit": "called(\"withdraw\") and reverted and arg(0) > 0 and arg(0) <= pre(\"shares\", sender)",
+  "enter": "called(\"deposit\") and reverted and (arg(0) > 0 and (pre(\"totalSupply\") == 0 or wide(arg(0)) * pre(\"totalSupply\") >= pre(\"totalAssets\")))",
+  "wd_mine": "called(\"withdraw\") and ok and post(\"shares\", sender) + arg(0) != pre(\"shares\", sender)",
+  "fair_out_floor": "called(\"withdraw\") and ok and wide(ret + 1) * pre(\"totalSupply\") <= wide(arg(0)) * pre(\"totalAssets\")",
+  "fair_in": "called(\"deposit\") and ok and pre(\"totalSupply\") > 0 and wide(ret) * pre(\"totalAssets\") > wide(arg(0)) * pre(\"totalSupply\")",
+  "fair_in_floor": "called(\"deposit\") and ok and pre(\"totalSupply\") > 0 and wide(ret + 1) * pre(\"totalAssets\") <= wide(arg(0)) * pre(\"totalSupply\")",
+  "price": "ok and pre(\"totalSupply\") > 0 and post(\"totalSupply\") > 0 and wide(post(\"totalAssets\")) * pre(\"totalSupply\") < wide(pre(\"totalAssets\")) * post(\"totalSupply\")"
+ },
+ "strength": 1.0,
+ "holds_by_construction": [],
+ "invariants": {
+  "ledger_inv": "post_sum(\"shares\") != post(\"totalSupply\")"
+ }
+}

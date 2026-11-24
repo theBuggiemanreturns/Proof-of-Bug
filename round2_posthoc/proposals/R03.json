@@ -1,0 +1,187 @@
+{
+ "rules": [
+  {
+   "name": "liquidity_ledger",
+   "family": "ledger",
+   "params": {
+    "accounts": "liquidityOf",
+    "total": "totalLiquidity"
+   },
+   "expr": "",
+   "why": "per-user liquidity sums to total"
+  },
+  {
+   "name": "incentives_only_owner",
+   "family": "never_when",
+   "params": {
+    "fn": "addIncentives",
+    "forbidden": "sender != pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "only owner adds incentives"
+  },
+  {
+   "name": "owner_fixed",
+   "family": "authorized_change",
+   "params": {
+    "value": "post(\"owner\")",
+    "before": "pre(\"owner\")",
+    "admin": "pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "owner never changes without admin"
+  },
+  {
+   "name": "deposit_nonzero_mint",
+   "family": "nonzero_mint",
+   "params": {
+    "fn": "deposit",
+    "amount_arg": "0"
+   },
+   "expr": "",
+   "why": "depositing always mints liquidity"
+  },
+  {
+   "name": "deposit_pulls_amount",
+   "family": "exact_effect",
+   "params": {
+    "fn": "deposit",
+    "value": "post(\"MockToken.balanceOf\", A0)",
+    "before": "pre(\"MockToken.balanceOf\", A0)",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "deposit takes exactly amount"
+  },
+  {
+   "name": "withdraw_burns_user",
+   "family": "exact_decrease",
+   "params": {
+    "fn": "withdraw",
+    "value": "post(\"liquidityOf\", sender)",
+    "before": "pre(\"liquidityOf\", sender)",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "withdraw burns exactly the given liquidity"
+  },
+  {
+   "name": "withdraw_burns_total",
+   "family": "exact_decrease",
+   "params": {
+    "fn": "withdraw",
+    "value": "post(\"totalLiquidity\")",
+    "before": "pre(\"totalLiquidity\")",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "total drops by burned liquidity"
+  },
+  {
+   "name": "withdraw_fair_custom",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and ((pre(\"totalLiquidity\") == 0 and post(\"MockToken.balanceOf\", A0) < pre(\"MockToken.balanceOf\", A0)) or wide(pre(\"MockToken.balanceOf\", A0) - post(\"MockToken.balanceOf\", A0)) * wide(pre(\"totalLiquidity\")) > wide(arg(0)) * wide(pre(\"MockToken.balanceOf\", A0)))",
+   "why": "withdraw pays at most liquidity/total of the pool; with zero total liquidity nobody holds a claim, so nothing may be paid (the old form evaluated 0 > 0 and missed this case)"
+  },
+  {
+   "name": "withdraw_zero_pays_nothing",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and arg(0) == 0 and post(\"MockToken.balanceOf\", A0) < pre(\"MockToken.balanceOf\", A0)",
+   "why": "burning nothing returns nothing"
+  },
+  {
+   "name": "share_price_monotone",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and pre(\"totalLiquidity\") > 0 and post(\"totalLiquidity\") > 0 and wide(post(\"MockToken.balanceOf\", A0)) * wide(pre(\"totalLiquidity\")) < wide(pre(\"MockToken.balanceOf\", A0)) * wide(post(\"totalLiquidity\"))",
+   "why": "assets per liquidity never drop"
+  },
+  {
+   "name": "deposit_fair",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"deposit\") and pre(\"totalLiquidity\") > 0 and wide(post(\"liquidityOf\", sender) - pre(\"liquidityOf\", sender)) * wide(pre(\"MockToken.balanceOf\", A0)) > wide(arg(0)) * wide(pre(\"totalLiquidity\"))",
+   "why": "deposit mints no more than its fair share"
+  },
+  {
+   "name": "no_third_party_liquidity_loss",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and post(\"liquidityOf\", u) < pre(\"liquidityOf\", u)",
+   "why": "nobody loses liquidity in others' calls"
+  },
+  {
+   "name": "no_third_party_token_loss",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and u != A0 and not called(\"MockToken.transferFrom\") and post(\"MockToken.balanceOf\", u) < pre(\"MockToken.balanceOf\", u)",
+   "why": "nobody loses tokens in others' calls; direct MockToken.transferFrom by an approved spender is legitimate and excluded"
+  },
+  {
+   "name": "vault_out_only_withdraw",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and post(\"MockToken.balanceOf\", A0) < pre(\"MockToken.balanceOf\", A0) and not called(\"withdraw\")",
+   "why": "assets leave only via withdraw"
+  },
+  {
+   "name": "withdraw_exit",
+   "family": "exit_amount",
+   "params": {
+    "fn": "withdraw",
+    "amount_arg": "0",
+    "balance": "liquidityOf"
+   },
+   "expr": "",
+   "why": "user can always withdraw their liquidity"
+  },
+  {
+   "name": "token_ledger",
+   "family": "ledger",
+   "params": {
+    "accounts": "MockToken.balanceOf",
+    "total": "MockToken.totalSupply"
+   },
+   "expr": "",
+   "why": "token conservation"
+  },
+  {
+   "name": "withdraw_payout_to_sender",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and sender != A0 and post(\"MockToken.balanceOf\", sender) - pre(\"MockToken.balanceOf\", sender) != pre(\"MockToken.balanceOf\", A0) - post(\"MockToken.balanceOf\", A0)",
+   "why": "whatever leaves the vault on withdraw goes to the caller"
+  }
+ ],
+ "invariants": [
+  {
+   "name": "liq_eq_sum",
+   "expr": "post(\"totalLiquidity\") != post_sum(\"liquidityOf\")",
+   "why": "total equals sum"
+  },
+  {
+   "name": "liq_backed",
+   "expr": "post(\"totalLiquidity\") > 0 and post(\"MockToken.balanceOf\", A0) == 0",
+   "why": "outstanding liquidity backed"
+  },
+  {
+   "name": "user_le_total",
+   "expr": "post(\"liquidityOf\", u) > post(\"totalLiquidity\")",
+   "why": "no user exceeds total"
+  }
+ ],
+ "review": {
+  "dropped": [
+   "withdraw_fair"
+  ],
+  "fixed": [
+   "no_third_party_token_loss",
+   "withdraw_fair_custom"
+  ],
+  "added": [
+   "withdraw_payout_to_sender"
+  ]
+ }
+}

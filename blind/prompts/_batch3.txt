@@ -1,0 +1,492 @@
+BATCH 3 of 3: cases C10, C11, C12. Reply with one JSON object keyed by these case ids (see your instructions).
+
+STANDARD TOKEN (every contract named TokenCnn / TokenCnn_XXX in these cases is exactly this code, renamed):
+```solidity
+contract TokenCxx {
+    string public name;
+    string public symbol;
+    uint8 public constant decimals = 18;
+    uint256 public totalSupply;
+    address public immutable minter;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+
+    constructor(string memory _name, string memory _symbol) {
+        name = _name;
+        symbol = _symbol;
+        minter = msg.sender;
+    }
+
+    function mint(address to, uint256 amount) external {
+        require(msg.sender == minter, "minter");
+        totalSupply += amount;
+        balanceOf[to] += amount;
+        emit Transfer(address(0), to, amount);
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        _transfer(msg.sender, to, amount);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        uint256 allowed = allowance[from][msg.sender];
+        if (allowed != type(uint256).max) {
+            require(allowed >= amount, "allowance");
+            allowance[from][msg.sender] = allowed - amount;
+        }
+        _transfer(from, to, amount);
+        return true;
+    }
+
+    function _transfer(address from, address to, uint256 amount) internal {
+        require(balanceOf[from] >= amount, "balance");
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        emit Transfer(from, to, amount);
+    }
+}
+```
+
+=================== CASE C10 ===================
+Contracts (the first is the one under test):
+### FarmC10
+storage: owner (address), rewardPerSecond (uint256), lastRewardTime (uint256), accRewardPerShare (uint256), totalStaked (uint256), userInfo (mapping(address,struct(UserInfo)6_storage))
+functions: deposit(uint256), emergencyWithdraw(), harvest(), setRewardPerSecond(uint256), updatePool(), withdraw(uint256)
+```solidity
+contract FarmC10 {
+    struct UserInfo {
+        uint256 amount;
+        uint256 rewardDebt;
+    }
+
+    uint256 private constant ACC_PRECISION = 1e12;
+
+    TokenC10 public immutable lpToken;
+    TokenC10 public immutable rewardToken;
+    address public owner;
+
+    uint256 public rewardPerSecond;
+    uint256 public lastRewardTime;
+    uint256 public accRewardPerShare;
+    uint256 public totalStaked;
+
+    mapping(address => UserInfo) public userInfo;
+
+    event Deposit(address indexed user, uint256 amount);
+    event Withdraw(address indexed user, uint256 amount);
+    event Harvest(address indexed user, uint256 amount);
+    event EmergencyWithdraw(address indexed user, uint256 amount);
+    event RewardRateUpdated(uint256 rewardPerSecond);
+
+    constructor(TokenC10 _lpToken, TokenC10 _rewardToken, uint256 _rewardPerSecond) {
+        lpToken = _lpToken;
+        rewardToken = _rewardToken;
+        rewardPerSecond = _rewardPerSecond;
+        lastRewardTime = block.timestamp;
+        owner = msg.sender;
+    }
+
+    function pendingReward(address account) external view returns (uint256) {
+        UserInfo storage user = userInfo[account];
+        uint256 acc = accRewardPerShare;
+        if (block.timestamp > lastRewardTime && totalStaked != 0) {
+            acc += ((block.timestamp - lastRewardTime) * rewardPerSecond * ACC_PRECISION) / totalStaked;
+        }
+        return (user.amount * acc) / ACC_PRECISION - user.rewardDebt;
+    }
+
+    function updatePool() public {
+        if (block.timestamp <= lastRewardTime) return;
+        if (totalStaked == 0) {
+            lastRewardTime = block.timestamp;
+            return;
+        }
+        uint256 reward = (block.timestamp - lastRewardTime) * rewardPerSecond;
+        accRewardPerShare += (reward * ACC_PRECISION) / totalStaked;
+        lastRewardTime = block.timestamp;
+    }
+
+    function deposit(uint256 amount) external {
+        updatePool();
+        UserInfo storage user = userInfo[msg.sender];
+        if (user.amount > 0) {
+            uint256 pending = (user.amount * accRewardPerShare) / ACC_PRECISION - user.rewardDebt;
+            if (pending > 0) {
+                _safeRewardTransfer(msg.sender, pending);
+                emit Harvest(msg.sender, pending);
+            }
+        }
+        user.rewardDebt = (user.amount * accRewardPerShare) / ACC_PRECISION;
+        if (amount > 0) {
+            require(lpToken.transferFrom(msg.sender, address(this), amount), "transfer");
+            user.amount += amount;
+            totalStaked += amount;
+        }
+        emit Deposit(msg.sender, amount);
+    }
+
+    function withdraw(uint256 amount) external {
+        UserInfo storage user = userInfo[msg.sender];
+        require(user.amount >= amount, "amount");
+        updatePool();
+        uint256 pending = (user.amount * accRewardPerShare) / ACC_PRECISION - user.rewardDebt;
+        if (pending > 0) {
+            _safeRewardTransfer(msg.sender, pending);
+            emit Harvest(msg.sender, pending);
+        }
+        if (amount > 0) {
+            user.amount -= amount;
+            totalStaked -= amount;
+            require(lpToken.transfer(msg.sender, amount), "transfer");
+        }
+        user.rewardDebt = (user.amount * accRewardPerShare) / ACC_PRECISION;
+        emit Withdraw(msg.sender, amount);
+    }
+
+    function harvest() external {
+        updatePool();
+        UserInfo storage user = userInfo[msg.sender];
+        uint256 accumulated = (user.amount * accRewardPerShare) / ACC_PRECISION;
+        uint256 pending = accumulated - user.rewardDebt;
+        user.rewardDebt = accumulated;
+        if (pending > 0) {
+            _safeRewardTransfer(msg.sender, pending);
+            emit Harvest(msg.sender, pending);
+        }
+    }
+
+    function emergencyWithdraw() external {
+        UserInfo storage user = userInfo[msg.sender];
+        uint256 amount = user.amount;
+        user.amount = 0;
+        user.rewardDebt = 0;
+        totalStaked -= amount;
+        require(lpToken.transfer(msg.sender, amount), "transfer");
+        emit EmergencyWithdraw(msg.sender, amount);
+    }
+
+    function setRewardPerSecond(uint256 _rewardPerSecond) external {
+        require(msg.sender == owner, "owner");
+        updatePool();
+        rewardPerSecond = _rewardPerSecond;
+        emit RewardRateUpdated(_rewardPerSecond);
+    }
+
+    function _safeRewardTransfer(address to, uint256 amount) internal {
+        uint256 balance = rewardToken.balanceOf(address(this));
+        if (amount > balance) amount = balance;
+        require(rewardToken.transfer(to, amount), "transfer");
+    }
+}
+```
+
+### TokenC10
+storage: name (string_storage), symbol (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+(source: the STANDARD TOKEN above, with this contract's name)
+
+### TokenC10
+storage: name (string_storage), symbol (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+(source: the STANDARD TOKEN above, with this contract's name)
+
+Deployment of this case (A0 is the contract under test):
+  A0 = FarmC10
+  A1 = TokenC10_LP  (an instance of TokenC10; write its storage as "TokenC10_LP.var")
+  A2 = TokenC10_FRM  (an instance of TokenC10; write its storage as "TokenC10_FRM.var")
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    TokenC10(A2).mint(A0, 1_000_000e18);
+    TokenC10(A1).mint(U0, 100);
+    TokenC10(A1).mint(U1, 100);
+    TokenC10(A1).mint(U2, 100);
+    TokenC10(A1).mint(U3, 100);
+    vm.prank(U0); TokenC10(A1).approve(A0, type(uint256).max);
+    vm.prank(U1); TokenC10(A1).approve(A0, type(uint256).max);
+    vm.prank(U2); TokenC10(A1).approve(A0, type(uint256).max);
+    vm.prank(U3); TokenC10(A1).approve(A0, type(uint256).max);
+
+=================== CASE C11 ===================
+Contracts (the first is the one under test):
+### StreamPayC11
+storage: nextStreamId (uint256), streams (mapping(uint256,struct(Stream)18_storage))
+functions: cancel(uint256), createStream(address,uint256,uint40,uint40), withdraw(uint256,uint128)
+```solidity
+contract StreamPayC11 {
+    struct Stream {
+        address sender;
+        address recipient;
+        uint128 deposit;
+        uint128 withdrawn;
+        uint256 ratePerSecond;
+        uint40 startTime;
+        uint40 stopTime;
+        bool cancelled;
+    }
+
+    TokenC11 public immutable token;
+    uint256 public nextStreamId = 1;
+    mapping(uint256 => Stream) public streams;
+
+    event StreamCreated(uint256 indexed id, address indexed sender, address indexed recipient, uint256 deposit, uint256 rate, uint256 start, uint256 stop);
+    event Withdrawn(uint256 indexed id, address indexed recipient, uint256 amount);
+    event Cancelled(uint256 indexed id, uint256 senderRefund, uint256 recipientPaid);
+
+    constructor(TokenC11 _token) {
+        token = _token;
+    }
+
+    function createStream(address recipient, uint256 ratePerSecond, uint40 startTime, uint40 stopTime)
+        external
+        returns (uint256 id)
+    {
+        require(recipient != address(0) && recipient != address(this), "recipient");
+        require(ratePerSecond > 0, "rate");
+        require(startTime >= block.timestamp, "start");
+        require(stopTime > startTime, "stop");
+
+        uint256 duration = uint256(stopTime) - startTime;
+        uint128 deposit = uint128(ratePerSecond * duration);
+
+        id = nextStreamId++;
+        streams[id] = Stream({
+            sender: msg.sender,
+            recipient: recipient,
+            deposit: deposit,
+            withdrawn: 0,
+            ratePerSecond: ratePerSecond,
+            startTime: startTime,
+            stopTime: stopTime,
+            cancelled: false
+        });
+
+        require(token.transferFrom(msg.sender, address(this), deposit), "transfer");
+        emit StreamCreated(id, msg.sender, recipient, deposit, ratePerSecond, startTime, stopTime);
+    }
+
+    function streamed(uint256 id) public view returns (uint256) {
+        Stream storage s = streams[id];
+        if (block.timestamp <= s.startTime) return 0;
+        uint256 end = block.timestamp < s.stopTime ? block.timestamp : s.stopTime;
+        return (end - s.startTime) * s.ratePerSecond;
+    }
+
+    function withdrawable(uint256 id) public view returns (uint256) {
+        Stream storage s = streams[id];
+        if (s.cancelled) return 0;
+        return streamed(id) - s.withdrawn;
+    }
+
+    function withdraw(uint256 id, uint128 amount) external {
+        Stream storage s = streams[id];
+        require(msg.sender == s.recipient, "recipient");
+        require(amount > 0 && amount <= withdrawable(id), "amount");
+        s.withdrawn += amount;
+        require(token.transfer(s.recipient, amount), "transfer");
+        emit Withdrawn(id, s.recipient, amount);
+    }
+
+    function cancel(uint256 id) external {
+        Stream storage s = streams[id];
+        require(msg.sender == s.sender || msg.sender == s.recipient, "party");
+        require(!s.cancelled, "cancelled");
+        uint256 owedToRecipient = streamed(id) - s.withdrawn;
+        uint256 refund = uint256(s.deposit) - s.withdrawn - owedToRecipient;
+        s.cancelled = true;
+        s.withdrawn += uint128(owedToRecipient);
+        if (owedToRecipient > 0) require(token.transfer(s.recipient, owedToRecipient), "transfer");
+        if (refund > 0) require(token.transfer(s.sender, refund), "transfer");
+        emit Cancelled(id, refund, owedToRecipient);
+    }
+}
+```
+
+### TokenC11
+storage: name (string_storage), symbol (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+(source: the STANDARD TOKEN above, with this contract's name)
+
+Deployment of this case (A0 is the contract under test):
+  A0 = StreamPayC11
+  A1 = TokenC11
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    TokenC11(A1).mint(U0, 100);
+    TokenC11(A1).mint(U1, 100);
+    TokenC11(A1).mint(U2, 100);
+    TokenC11(A1).mint(U3, 100);
+    vm.prank(U0); TokenC11(A1).approve(A0, type(uint256).max);
+    vm.prank(U1); TokenC11(A1).approve(A0, type(uint256).max);
+    vm.prank(U2); TokenC11(A1).approve(A0, type(uint256).max);
+    vm.prank(U3); TokenC11(A1).approve(A0, type(uint256).max);
+
+=================== CASE C12 ===================
+Contracts (the first is the one under test):
+### AuctionHouseC12
+storage: nextAuctionId (uint256), auctions (mapping(uint256,struct(Auction)16_storage)), pendingWithdrawals (mapping(address,uint256)), locked (uint256)
+functions: bid(uint256), cancel(uint256), createAuction(uint96,uint256,uint64), settle(uint256), withdraw()
+```solidity
+contract AuctionHouseC12 {
+    struct Auction {
+        address seller;
+        uint96 lotAmount;
+        uint64 endTime;
+        bool settled;
+        address highestBidder;
+        uint256 highestBid;
+        uint256 reservePrice;
+    }
+
+    uint256 public constant MIN_INCREMENT_BPS = 500;
+    uint256 public constant EXTENSION_WINDOW = 10 minutes;
+    uint256 public constant MAX_DURATION = 30 days;
+
+    TokenC12 public immutable lot;
+    uint256 public nextAuctionId = 1;
+    mapping(uint256 => Auction) public auctions;
+    mapping(address => uint256) public pendingWithdrawals;
+
+    uint256 private locked = 1;
+
+    event AuctionCreated(uint256 indexed id, address indexed seller, uint256 amount, uint256 reserve, uint256 endTime);
+    event BidPlaced(uint256 indexed id, address indexed bidder, uint256 amount, uint256 endTime);
+    event AuctionSettled(uint256 indexed id, address winner, uint256 amount);
+    event AuctionCancelled(uint256 indexed id);
+    event Withdrawal(address indexed account, uint256 amount);
+
+    constructor(TokenC12 _lot) {
+        lot = _lot;
+    }
+
+    modifier nonReentrant() {
+        require(locked == 1, "reentrant");
+        locked = 2;
+        _;
+        locked = 1;
+    }
+
+    function createAuction(uint96 lotAmount, uint256 reservePrice, uint64 duration)
+        external
+        nonReentrant
+        returns (uint256 id)
+    {
+        require(lotAmount > 0, "amount");
+        require(duration > 0 && duration <= MAX_DURATION, "duration");
+        uint256 beforeBal = lot.balanceOf(address(this));
+        require(lot.transferFrom(msg.sender, address(this), lotAmount), "transfer");
+        require(lot.balanceOf(address(this)) - beforeBal == lotAmount, "received");
+
+        id = nextAuctionId++;
+        auctions[id] = Auction({
+            seller: msg.sender,
+            lotAmount: lotAmount,
+            endTime: uint64(block.timestamp) + duration,
+            settled: false,
+            highestBidder: address(0),
+            highestBid: 0,
+            reservePrice: reservePrice
+        });
+        emit AuctionCreated(id, msg.sender, lotAmount, reservePrice, block.timestamp + duration);
+    }
+
+    function minNextBid(uint256 id) public view returns (uint256) {
+        Auction storage a = auctions[id];
+        if (a.highestBid == 0) return a.reservePrice == 0 ? 1 : a.reservePrice;
+        return a.highestBid + (a.highestBid * MIN_INCREMENT_BPS + 9_999) / 10_000;
+    }
+
+    function bid(uint256 id) external payable nonReentrant {
+        Auction storage a = auctions[id];
+        require(a.seller != address(0), "no auction");
+        require(!a.settled, "settled");
+        require(block.timestamp < a.endTime, "ended");
+        require(msg.sender != a.seller, "seller");
+        require(msg.value >= minNextBid(id), "bid too low");
+
+        address previous = a.highestBidder;
+        uint256 previousBid = a.highestBid;
+
+        a.highestBidder = msg.sender;
+        a.highestBid = msg.value;
+
+        if (previous != address(0)) {
+            pendingWithdrawals[previous] += previousBid;
+        }
+
+        if (a.endTime - block.timestamp < EXTENSION_WINDOW) {
+            a.endTime = uint64(block.timestamp + EXTENSION_WINDOW);
+        }
+        emit BidPlaced(id, msg.sender, msg.value, a.endTime);
+    }
+
+    function settle(uint256 id) external nonReentrant {
+        Auction storage a = auctions[id];
+        require(a.seller != address(0), "no auction");
+        require(!a.settled, "settled");
+        require(block.timestamp >= a.endTime, "not ended");
+        a.settled = true;
+
+        if (a.highestBidder == address(0)) {
+            require(lot.transfer(a.seller, a.lotAmount), "transfer");
+            emit AuctionSettled(id, address(0), 0);
+            return;
+        }
+
+        pendingWithdrawals[a.seller] += a.highestBid;
+        require(lot.transfer(a.highestBidder, a.lotAmount), "transfer");
+        emit AuctionSettled(id, a.highestBidder, a.highestBid);
+    }
+
+    function cancel(uint256 id) external nonReentrant {
+        Auction storage a = auctions[id];
+        require(msg.sender == a.seller, "seller");
+        require(!a.settled, "settled");
+        require(a.highestBidder == address(0), "has bids");
+        a.settled = true;
+        require(lot.transfer(a.seller, a.lotAmount), "transfer");
+        emit AuctionCancelled(id);
+    }
+
+    function withdraw() external nonReentrant {
+        uint256 amount = pendingWithdrawals[msg.sender];
+        require(amount > 0, "nothing");
+        pendingWithdrawals[msg.sender] = 0;
+        (bool ok, ) = msg.sender.call{value: amount}("");
+        require(ok, "send failed");
+        emit Withdrawal(msg.sender, amount);
+    }
+}
+```
+
+### TokenC12
+storage: name (string_storage), symbol (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+(source: the STANDARD TOKEN above, with this contract's name)
+
+Deployment of this case (A0 is the contract under test):
+  A0 = AuctionHouseC12
+  A1 = TokenC12
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  U1 is a contract: when the contract under test calls it (e.g. sends it ETH) it may call back into the contract once per transaction, with any function and arguments.
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    TokenC12(A1).mint(U0, 100);
+    TokenC12(A1).mint(U1, 100);
+    TokenC12(A1).mint(U2, 100);
+    TokenC12(A1).mint(U3, 100);
+    vm.prank(U0); TokenC12(A1).approve(A0, type(uint256).max);
+    vm.prank(U1); TokenC12(A1).approve(A0, type(uint256).max);
+    vm.prank(U2); TokenC12(A1).approve(A0, type(uint256).max);
+    vm.prank(U3); TokenC12(A1).approve(A0, type(uint256).max);

@@ -1,0 +1,82 @@
+TRIAGE REQUEST 1 (round 2: cases R01-R09, R11; R10 and R12 had no counterexample). The machine found transaction sequences that break some rules for these contracts and replayed each one on the real EVM (Foundry), where it broke the rule too. For each one, decide: is this a REAL BUG in the contract (the designers could not have intended it), or was the RULE WRONG (the behaviour is acceptable and the rule over-claimed)? You have no answer key and no one else's opinion; judge from the contract and the sequence only. Most rules are yours; some were corrected or added by an independent reviewer after you sent them (marked), judge those the same way.
+
+Notation: calls without a prefix go to the contract under test A0 = 0x99 = 153; other contracts: A1 = 0x98 = 152, A2 = 0x97 = 151, A3 = 0x96 = 150 ("MockToken.fn", "LegacyPool.fn", "SimplePair.fn" etc. = a call to that contract). Users are 0x31 (=49, U0), 0x32 (=50, U1), 0x33 (=51, U2); in R02, 0x32 is a contract that may call back ("[attacker calls back ...]" = during the ETH it receives it calls that function on A0). Numbers are decimal; "at t=..." is block.timestamp; "sending N wei" is msg.value. "reverted" lists 0-based steps that reverted on the EVM (they changed nothing; a must-succeed rule breaks on such a step). depositMulti([a, b]) shows the array argument decoded.
+
+R01:
+1. rule create_records_lock: ok and called("createLock") and (post("locks", pre("nextLockId"), "beneficiary") != arg(0) or post("locks", pre("nextLockId"), "creator") != sender or post("locks", pre("nextLockId"), "sharesDeposited") != post("locks", pre("nextLockId"), "shares") or post("locks", pre("nextLockId"), "end") != now + arg(2))
+   sequence: createLock(49, 4, 100) from 0x32 at t=1 -> MockToken.approve(1, 590295810358705651711) from 0x31 at t=27 -> createLock(590295810358705651711, 3, 18446744073709551615) from 0x32 at t=295147905179352825856
+2. rule release_updates_lock_shares: ok and called("release") and pre("locks", arg(0), "shares") - post("locks", arg(0), "shares") != post("locks", arg(0), "sharesWithdrawn") - pre("locks", arg(0), "sharesWithdrawn")
+   sequence: createLock(50, 2, 1) from 0x32 at t=292688939782808535031 -> release(1) from 0x31 at t=461966673916487270393 -> release(1) from 0x32 at t=498860162063906373624   (steps 1 reverted)
+3. rule totalShares_in_sync_locks: ok and (post("totalShares")) + (pre_sum("locks", "shares")) != (pre("totalShares")) + (post_sum("locks", "shares"))
+   sequence: release(0) from 0x31 at t=3
+
+R02:
+4. rule deposit_record: ok and called("deposit") and (post("deposits", pre("nextId"), "owner") != sender or post("deposits", pre("nextId"), "amount") != post("ETH", A0) - pre("ETH", A0) or post("deposits", pre("nextId"), "unlockAt") != now + arg(0))
+   sequence: withdraw(0) from 0x31 at t=18446744073678015616 [attacker calls back extend(0, 1)] -> deposit(98304) from 0x32 sending 4995993186629670229 wei at t=32281802128991715327 [attacker calls back topUp(1)]
+5. rule owner_changes_only_via_move (rule added by the reviewer): ok and not called("moveOwnership") and pre("deposits", arg(0), "owner") != 0 and post("deposits", arg(0), "owner") != pre("deposits", arg(0), "owner")
+   sequence: deposit(131160) from 0x32 sending 388313981572349952 wei at t=10376293541600559144 -> withdraw(1) from 0x32 at t=14213360423994458111 [attacker calls back moveOwnership(1, 5568513)]
+
+R03:
+6. rule withdraw_fair_custom (rule corrected by the reviewer): ok and called("withdraw") and ((pre("totalLiquidity") == 0 and post("MockToken.balanceOf", A0) < pre("MockToken.balanceOf", A0)) or wide(pre("MockToken.balanceOf", A0) - post("MockToken.balanceOf", A0)) * wide(pre("totalLiquidity")) > wide(arg(0)) * wide(pre("MockToken.balanceOf", A0)))
+   sequence: withdraw(0) from 0x31
+7. rule withdraw_zero_pays_nothing: ok and called("withdraw") and arg(0) == 0 and post("MockToken.balanceOf", A0) < pre("MockToken.balanceOf", A0)
+   sequence: withdraw(0) from 0x31
+
+R04:
+8. rule delegate_over_balance: called("delegate") and ok and ((arg(0) > pre("balanceOf", sender)))
+   sequence: undelegate(95780971304118053647396689196894323976171195136475136) from 0x31 -> delegate(11) from 0x32   (steps 0 reverted)
+9. rule delegate_debits: called("delegate") and ok and (post("balanceOf", sender)) + (arg(0)) != (pre("balanceOf", sender))
+   sequence: undelegate(95780971304118053647396689196894323976171195136475136) from 0x31 -> delegate(11) from 0x32   (steps 0 reverted)
+10. rule conservation: ok and not called("credit") and not called("grantVesting") and post_sum("balanceOf") + post("totalDelegated") != pre_sum("balanceOf") + pre("totalDelegated")
+   sequence: undelegate(95780971304118053647396689196894323976171195136475136) from 0x31 -> delegate(11) from 0x32   (steps 0 reverted)
+11. rule balance_bounded: ok and post("balanceOf", u) > post("totalSupply")
+   sequence: undelegate(95780971304118053647396689196894323976171195136475136) from 0x31 -> delegate(11) from 0x32   (steps 0 reverted)
+12. rule balance_no_wrap (rule added by the reviewer): ok and (called("delegate") or called("transfer")) and post("balanceOf", sender) > pre("balanceOf", sender)
+   sequence: undelegate(95780971304118053647396689196894323976171195136475136) from 0x31 -> delegate(11) from 0x32   (steps 0 reverted)
+13. rule no_third_party_balance_loss: ok and u != sender and post("balanceOf", u) < pre("balanceOf", u)
+   sequence: delegate(1500) from 0x32 -> transfer(50, 18000000000000000000) from 0x31
+14. rule transfer_conserves: ok and called("transfer") and post_sum("balanceOf") != pre_sum("balanceOf")
+   sequence: delegate(1500) from 0x32 -> transfer(50, 18000000000000000000) from 0x31
+15. rule transfer_exact (rule added by the reviewer): ok and called("transfer") and arg(0) != sender and (pre("balanceOf", sender) - post("balanceOf", sender) != arg(1) or post("balanceOf", arg(0)) - pre("balanceOf", arg(0)) != arg(1))
+   sequence: delegate(1500) from 0x32 -> transfer(50, 18000000000000000000) from 0x31
+16. rule undelegate_credits: called("undelegate") and ok and (post("balanceOf", sender)) != (pre("balanceOf", sender)) + (arg(0))
+   sequence: delegate(50) from 0x32 -> undelegate(50) from 0x32
+
+R05:
+17. rule withdraw_fee_floor: called("withdraw") and ok and ((arg(1) < pre("minFee")))
+   sequence: collectFees(49) from 0x31 -> setMinFee(1208925819614629174706176) from 0x32 -> MockToken.mint(50, 3332929152) from 0x32 -> withdraw(122970482, 112, 411376139330301510538742295639337626245683966408394965837152255) from 0x31   (steps 0, 1, 2 reverted)
+
+R06:
+18. rule rebalance_only_current: called("rebalance") and ok and ((sender != pre("rebalancer")))
+   sequence: setRebalancer(51) from 0x31 -> rebalance(153, 105570665) from 0x33   (steps 0 reverted)
+19. rule deposit_nonzero: called("deposit") and ok and arg((0)) > 0 and ret == 0
+   sequence: MockToken.transfer(50, 30869802006268626521237433452617706752280171973410646069311967096566886602137) from 0x31 -> withdraw(422866995) from 0x31 -> MockToken.mint(152, 24519928653854221733733552434404946937899825954937634815) from 0x33 -> deposit(16) from 0x31   (steps 0, 2 reverted)
+
+R07:
+20. rule deposit_fair: ok and called("depositMulti") and pre("totalSupply") > 0 and wide(post("totalSupply") - pre("totalSupply")) * wide(pre("MockToken_A.balanceOf", A0) + pre("MockToken_B.balanceOf", A0)) > wide(post("MockToken_A.balanceOf", A0) + post("MockToken_B.balanceOf", A0) - pre("MockToken_A.balanceOf", A0) - pre("MockToken_B.balanceOf", A0)) * wide(pre("totalSupply"))
+   sequence: MockToken_A.transfer(49, 5192296858534827628530496329220096) from 0x31 -> depositMulti([4722366482869645213695]) from 0x31 -> depositMulti([20000000000000000000]) from 0x32   (steps 0, 1 reverted)
+21. rule share_price_monotone: ok and pre("totalSupply") > 0 and post("totalSupply") > 0 and wide(post("MockToken_A.balanceOf", A0) + post("MockToken_B.balanceOf", A0)) * wide(pre("totalSupply")) < wide(pre("MockToken_A.balanceOf", A0) + pre("MockToken_B.balanceOf", A0)) * wide(post("totalSupply"))
+   sequence: MockToken_A.transfer(49, 5192296858534827628530496329220096) from 0x31 -> depositMulti([4722366482869645213695]) from 0x31 -> depositMulti([20000000000000000000]) from 0x32   (steps 0, 1 reverted)
+
+R08:
+22. rule importLegacy_resets_debt: ok and called("importLegacy") and post("userInfo", sender, "rewardDebt") != wide(post("userInfo", sender, "amount")) * wide(post("accRewardPerShare")) // 1000000000000
+   sequence: LegacyPool.deposit(129) from 0x32 -> LegacyPool.deposit(46) from 0x32 -> importLegacy() from 0x32
+23. rule import_no_reward_windfall (rule added by the reviewer): ok and called("importLegacy") and wide(post("userInfo", sender, "amount")) * wide(post("accRewardPerShare")) // 1000000000000 - post("userInfo", sender, "rewardDebt") > wide(pre("userInfo", sender, "amount")) * wide(pre("accRewardPerShare")) // 1000000000000 - pre("userInfo", sender, "rewardDebt")
+   sequence: LegacyPool.deposit(129) from 0x32 -> LegacyPool.deposit(46) from 0x32 -> importLegacy() from 0x32
+
+R09:
+24. rule ledger: ok and post_sum("balanceOf") != post("totalSupply")
+   sequence: transfer(0, 2000) from 0x31 -> MockToken.transferFrom(50, 49, 20000000000000000000) from 0x32 -> MockToken.transfer(151, 404098525) from 0x31   (steps 0, 1 reverted)
+25. rule pair_product: ok and wide(post("SimplePair.reserve0")) * post("SimplePair.reserve1") < wide(pre("SimplePair.reserve0")) * pre("SimplePair.reserve1")
+   sequence: transfer(151, 252) from 0x32
+
+R11:
+26. rule deposit_fair: ok and called("deposit") and pre("totalSupply") > 0 and wide(post("totalSupply") - pre("totalSupply")) * wide(pre("MockToken.balanceOf", A0)) > wide(post("MockToken.balanceOf", A0) - pre("MockToken.balanceOf", A0)) * wide(pre("totalSupply"))
+   sequence: MockToken.approve(152, 990000000) from 0x32 -> transfer(153, 141478433) from 0x32 -> MockToken.mint(49, 1239111706) from 0x32 -> deposit(306533968) from 0x31   (steps 1, 2 reverted)
+27. rule deposit_pulls_something: ok and called("deposit") and post("MockToken.balanceOf", A0) <= pre("MockToken.balanceOf", A0)
+   sequence: MockToken.approve(152, 990000000) from 0x32 -> transfer(153, 141478433) from 0x32 -> MockToken.mint(49, 1239111706) from 0x32 -> deposit(306533968) from 0x31   (steps 1, 2 reverted)
+28. rule share_price_monotone: ok and pre("totalSupply") > 0 and post("totalSupply") > 0 and wide(post("MockToken.balanceOf", A0)) * wide(pre("totalSupply")) < wide(pre("MockToken.balanceOf", A0)) * wide(post("totalSupply"))
+   sequence: MockToken.approve(152, 990000000) from 0x32 -> transfer(153, 141478433) from 0x32 -> MockToken.mint(49, 1239111706) from 0x32 -> deposit(306533968) from 0x31   (steps 1, 2 reverted)
+
+Reply with send_message to session_01KANsTd7g6gbrTKs2CEknDz, one JSON object (split over two messages if needed):
+{"triage": [{"case": "R01", "n": 1, "rule": "create_records_lock", "verdict": "real_bug" or "rule_wrong", "why": "one or two sentences"}, ...]}

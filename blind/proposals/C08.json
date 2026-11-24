@@ -1,0 +1,193 @@
+{
+ "rules": [
+  {
+   "name": "ledger",
+   "family": "ledger",
+   "params": {
+    "accounts": "balanceOf",
+    "total": "totalSupply"
+   },
+   "expr": "",
+   "why": "LP balances sum to supply"
+  },
+  {
+   "name": "k_swap",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"swap\") and wide(post(\"reserve0\")) * post(\"reserve1\") < wide(pre(\"reserve0\")) * pre(\"reserve1\")",
+   "why": "swap never lowers k"
+  },
+  {
+   "name": "k_family",
+   "family": "product_monotone",
+   "params": {
+    "x": "reserve0",
+    "y": "reserve1"
+   },
+   "expr": "",
+   "why": "constant product never shrinks on swaps"
+  },
+  {
+   "name": "lp_value_monotone",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and pre(\"totalSupply\") > 0 and post(\"totalSupply\") > 0 and wide(post(\"reserve0\")) * post(\"reserve1\") * pre(\"totalSupply\") * pre(\"totalSupply\") < wide(pre(\"reserve0\")) * pre(\"reserve1\") * post(\"totalSupply\") * post(\"totalSupply\")",
+   "why": "k per LP share squared never drops"
+  },
+  {
+   "name": "r0_per_share_mintburn",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"mint\") or called(\"burn\")) and pre(\"totalSupply\") > 0 and post(\"totalSupply\") > 0 and wide(post(\"reserve0\")) * pre(\"totalSupply\") < wide(pre(\"reserve0\")) * post(\"totalSupply\")",
+   "why": "token0 per share not diluted by mint/burn"
+  },
+  {
+   "name": "r1_per_share_mintburn",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"mint\") or called(\"burn\")) and pre(\"totalSupply\") > 0 and post(\"totalSupply\") > 0 and wide(post(\"reserve1\")) * pre(\"totalSupply\") < wide(pre(\"reserve1\")) * post(\"totalSupply\")",
+   "why": "token1 per share not diluted by mint/burn"
+  },
+  {
+   "name": "burn_fair",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"burn\") and wide(ret) * pre(\"totalSupply\") > wide(pre(\"balanceOf\", A0)) * pre(\"TokenC08_TKA.balanceOf\", A0)",
+   "why": "burn pays at most pro-rata token0"
+  },
+  {
+   "name": "burn_clears",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"burn\") and (post(\"balanceOf\", A0) != 0 or post(\"totalSupply\") + pre(\"balanceOf\", A0) != pre(\"totalSupply\"))",
+   "why": "burn burns exactly the pair-held LP"
+  },
+  {
+   "name": "reserves_synced",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"mint\") or called(\"burn\") or called(\"swap\") or called(\"sync\")) and (post(\"reserve0\") != post(\"TokenC08_TKA.balanceOf\", A0) or post(\"reserve1\") != post(\"TokenC08_TKB.balanceOf\", A0))",
+   "why": "reserves equal balances after state-changing calls"
+  },
+  {
+   "name": "r0_backed",
+   "family": "bounded_by",
+   "params": {
+    "amount": "post(\"reserve0\")",
+    "backing": "post(\"TokenC08_TKA.balanceOf\", A0)"
+   },
+   "expr": "",
+   "why": "reserve0 backed"
+  },
+  {
+   "name": "r1_backed",
+   "family": "bounded_by",
+   "params": {
+    "amount": "post(\"reserve1\")",
+    "backing": "post(\"TokenC08_TKB.balanceOf\", A0)"
+   },
+   "expr": "",
+   "why": "reserve1 backed"
+  },
+  {
+   "name": "skim_keeps_reserves",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"skim\") and (post(\"reserve0\") != pre(\"reserve0\") or post(\"reserve1\") != pre(\"reserve1\") or post(\"TokenC08_TKA.balanceOf\", A0) != post(\"reserve0\") or post(\"TokenC08_TKB.balanceOf\", A0) != post(\"reserve1\"))",
+   "why": "skim removes only the excess"
+  },
+  {
+   "name": "swap_to",
+   "family": "never_when",
+   "params": {
+    "fn": "swap",
+    "forbidden": "arg(2) == A1 or arg(2) == A2 or (arg(0) == 0 and arg(1) == 0) or arg(0) >= pre(\"reserve0\") or arg(1) >= pre(\"reserve1\")"
+   },
+   "expr": "",
+   "why": "cannot send to token contracts; needs output"
+  },
+  {
+   "name": "swap_supply",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"swap\") and post(\"totalSupply\") != pre(\"totalSupply\")",
+   "why": "swap mints nothing"
+  },
+  {
+   "name": "transfer_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"transfer\") and arg(0) != sender and (post(\"balanceOf\", sender) + arg(1) != pre(\"balanceOf\", sender) or post(\"balanceOf\", arg(0)) != pre(\"balanceOf\", arg(0)) + arg(1))",
+   "why": "LP transfer exact"
+  },
+  {
+   "name": "transfer_no_reserves",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"transfer\") and (post(\"reserve0\") != pre(\"reserve0\") or post(\"reserve1\") != pre(\"reserve1\") or post(\"totalSupply\") != pre(\"totalSupply\"))",
+   "why": "transfer touches nothing else"
+  },
+  {
+   "name": "lp_third_party",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and u != A0 and post(\"balanceOf\", u) < pre(\"balanceOf\", u)",
+   "why": "nobody loses LP in others' calls"
+  },
+  {
+   "name": "tokens_third_party",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"mint\") or called(\"burn\") or called(\"swap\") or called(\"skim\") or called(\"sync\") or called(\"transfer\")) and u != sender and u != A0 and (post(\"TokenC08_TKA.balanceOf\", u) < pre(\"TokenC08_TKA.balanceOf\", u) or post(\"TokenC08_TKB.balanceOf\", u) < pre(\"TokenC08_TKB.balanceOf\", u))",
+   "why": "pair calls never take users' tokens"
+  },
+  {
+   "name": "min_liquidity_locked",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and pre(\"totalSupply\") > 0 and post(\"balanceOf\", 57005) < 1000",
+   "why": "minimum liquidity stays locked"
+  },
+  {
+   "name": "first_mint_min",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"mint\") and pre(\"totalSupply\") == 0 and post(\"balanceOf\", 57005) != 1000",
+   "why": "first mint locks MINIMUM_LIQUIDITY"
+  },
+  {
+   "name": "mint_needs_input",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"mint\") and post(\"reserve0\") <= pre(\"reserve0\") and post(\"reserve1\") <= pre(\"reserve1\")",
+   "why": "mint requires deposited tokens"
+  }
+ ],
+ "invariants": [
+  {
+   "name": "ledger",
+   "expr": "post_sum(\"balanceOf\") != post(\"totalSupply\")",
+   "why": "LP ledger"
+  },
+  {
+   "name": "r0_backed",
+   "expr": "post(\"reserve0\") > post(\"TokenC08_TKA.balanceOf\", A0)",
+   "why": "reserve0 held"
+  },
+  {
+   "name": "r1_backed",
+   "expr": "post(\"reserve1\") > post(\"TokenC08_TKB.balanceOf\", A0)",
+   "why": "reserve1 held"
+  },
+  {
+   "name": "unlocked",
+   "expr": "post(\"unlocked\") != 1",
+   "why": "lock released"
+  },
+  {
+   "name": "supply_reserves",
+   "expr": "post(\"totalSupply\") > 0 and (post(\"reserve0\") == 0 or post(\"reserve1\") == 0)",
+   "why": "live pool has both reserves"
+  }
+ ]
+}

@@ -1,0 +1,60 @@
+{
+ "triage": [
+  {
+   "case": "C06",
+   "n": 12,
+   "rule": "ledger",
+   "verdict": "real_bug",
+   "why": "_transfer caches both balances before writing, so a self-transfer of 50 shares credits the sender 50 extra shares without changing totalSupply, which creates shares from nothing."
+  },
+  {
+   "case": "C06",
+   "n": 13,
+   "rule": "tf_allow_f",
+   "verdict": "rule_wrong",
+   "why": "The allowance is type(uint256).max, which by the standard (and this code) means unlimited and is not spent; the family rule should have excluded the max allowance, as my custom transferfrom_allowance rule does."
+  },
+  {
+   "case": "C08",
+   "n": 14,
+   "rule": "k_swap",
+   "verdict": "real_bug",
+   "why": "The K check compares balances scaled by 10_000 against reserves scaled by only 1000**2, so it is 100x too lax: 50 wei of token1 buys 99% of the token0 reserve and x*y collapses."
+  },
+  {
+   "case": "C08",
+   "n": 15,
+   "rule": "k_family",
+   "verdict": "real_bug",
+   "why": "Same mis-scaled K check: a 100-wei donation lets the caller drain 990e18 of token0, lowering x*y."
+  },
+  {
+   "case": "C08",
+   "n": 16,
+   "rule": "lp_value_monotone",
+   "verdict": "real_bug",
+   "why": "Same mis-scaled K check: 2 wei of token0 buys almost half the token1 reserve, so the value per LP share falls for every LP."
+  },
+  {
+   "case": "C08",
+   "n": 17,
+   "rule": "skim_keeps_reserves",
+   "verdict": "rule_wrong",
+   "why": "skim(to = the pair itself) sends the excess back to the pair, a harmless no-op that leaves the balance above the reserve; my rule wrongly assumed skim always reduces balances to the reserves."
+  },
+  {
+   "case": "C10",
+   "n": 18,
+   "rule": "debt_synced",
+   "verdict": "real_bug",
+   "why": "deposit sets rewardDebt from the old amount (0 for a new staker) and then adds the stake, so the newcomer's debt stays 0 and they can harvest all rewards accumulated since launch on the new stake, draining earlier stakers' rewards."
+  },
+  {
+   "case": "C11",
+   "n": 19,
+   "rule": "create_deposit_exact",
+   "verdict": "real_bug",
+   "why": "deposit is cast to uint128, so a large rate*duration is silently truncated: the creator escrows far less than the stream promises, while streamed() pays the full rate out of other streams' funds."
+  }
+ ]
+}

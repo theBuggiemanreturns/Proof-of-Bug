@@ -1,0 +1,35 @@
+{
+ "drop": [],
+ "fix": [
+  {
+   "name": "cancel_fair",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"cancel\") and wide(pre(\"MockToken.balanceOf\", A0) - post(\"MockToken.balanceOf\", A0)) * wide(pre(\"totalShares\")) > wide(pre(\"locks\", arg(0), \"sharesDeposited\") - pre(\"locks\", arg(0), \"sharesWithdrawn\")) * wide(pre(\"MockToken.balanceOf\", A0))",
+   "why": "cancel pays out at most the fraction of the pool matching the lock's truly outstanding shares (deposited - withdrawn); the stored 'shares' field may itself be stale, so the rule must not trust it"
+  },
+  {
+   "name": "no_third_party_token_loss",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and u != A0 and not called(\"MockToken.transferFrom\") and post(\"MockToken.balanceOf\", u) < pre(\"MockToken.balanceOf\", u)",
+   "why": "nobody loses tokens in a call they did not make; direct MockToken.transferFrom by an approved spender is legitimate and excluded"
+  }
+ ],
+ "add": [
+  {
+   "name": "create_fair",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"createLock\") and pre(\"totalShares\") > 0 and pre(\"MockToken.balanceOf\", A0) > 0 and wide(post(\"totalShares\") - pre(\"totalShares\")) * wide(pre(\"MockToken.balanceOf\", A0)) > wide(arg(1)) * wide(pre(\"totalShares\"))",
+   "why": "a new lock gets no more shares than its fair fraction of the pool"
+  },
+  {
+   "name": "cancel_creator_bounded",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"cancel\") and pre(\"locks\", arg(0), \"creator\") != pre(\"locks\", arg(0), \"beneficiary\") and wide(post(\"MockToken.balanceOf\", pre(\"locks\", arg(0), \"creator\")) - pre(\"MockToken.balanceOf\", pre(\"locks\", arg(0), \"creator\"))) * wide(pre(\"totalShares\")) > wide(pre(\"locks\", arg(0), \"sharesDeposited\") - pre(\"locks\", arg(0), \"sharesWithdrawn\")) * wide(pre(\"MockToken.balanceOf\", A0))",
+   "why": "on cancel the creator gets at most the outstanding (unreleased) part of the lock, never tokens already released or belonging to other locks"
+  }
+ ]
+}

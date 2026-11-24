@@ -1,0 +1,17 @@
+{
+ "case": "R02",
+ "rules": {
+  "auth_owner": "ok and sender != pre(\"owner\") and post(\"owner\") != pre(\"owner\")",
+  "exec_balance": "called(\"execute\") and ok and post(\"balance\") + arg(1) != pre(\"balance\")",
+  "exec_works": "called(\"execute\") and reverted and (sender == pre(\"owner\") and arg(1) <= pre(\"balance\"))",
+  "exec_owner": "called(\"execute\") and ok and sender != pre(\"owner\")",
+  "conserved": "ok and post_sum(\"paidOut\") + post(\"balance\") != pre_sum(\"paidOut\") + pre(\"balance\")",
+  "exec_paid": "called(\"execute\") and ok and post(\"paidOut\", arg(0)) != pre(\"paidOut\", arg(0)) + arg(1)"
+ },
+ "strength": 0.8571428571428571,
+ "holds_by_construction": [
+  "auth_owner",
+  "init_once"
+ ],
+ "invariants": {}
+}

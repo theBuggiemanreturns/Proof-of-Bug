@@ -1,0 +1,150 @@
+{
+ "rules": [
+  {
+   "name": "pair_product",
+   "family": "product_monotone",
+   "params": {
+    "x": "SimplePair.reserve0",
+    "y": "SimplePair.reserve1"
+   },
+   "expr": "",
+   "why": "pool k never shrinks"
+  },
+  {
+   "name": "pair_balance_only_swap",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and not called(\"SimplePair.swap\") and post(\"balanceOf\", A2) < pre(\"balanceOf\", A2)",
+   "why": "pair's tokens only leave through a swap; sell tax must be taken from the seller, not the pair"
+  },
+  {
+   "name": "pair_receives_on_sell",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"transfer\") or called(\"transferFrom\")) and sender != A2 and post(\"balanceOf\", A2) < pre(\"balanceOf\", A2)",
+   "why": "selling to the pair never lowers the pair's balance"
+  },
+  {
+   "name": "ledger",
+   "family": "ledger",
+   "params": {
+    "accounts": "balanceOf",
+    "total": "totalSupply"
+   },
+   "expr": "",
+   "why": "balances sum to supply"
+  },
+  {
+   "name": "allowance_spent",
+   "family": "allowance_spent",
+   "params": {
+    "fn": "transferFrom",
+    "allowance": "allowance",
+    "owner_arg": "0",
+    "amount_arg": "2"
+   },
+   "expr": "",
+   "why": "transferFrom uses allowance"
+  },
+  {
+   "name": "no_loss_beyond_allowance",
+   "family": "no_loss_beyond_allowance",
+   "params": {
+    "balance": "balanceOf",
+    "allowance": "allowance"
+   },
+   "expr": "",
+   "why": "others take at most approval"
+  },
+  {
+   "name": "supply_never_up",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and post(\"totalSupply\") > pre(\"totalSupply\")",
+   "why": "no minting after deploy"
+  },
+  {
+   "name": "receiver_gets_at_most_amount",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"transfer\") and arg(0) != sender and post(\"balanceOf\", arg(0)) - pre(\"balanceOf\", arg(0)) > arg(1)",
+   "why": "receiver gets at most amount"
+  },
+  {
+   "name": "sender_pays_at_least",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"transfer\") and arg(0) != sender and pre(\"balanceOf\", sender) - post(\"balanceOf\", sender) < arg(1)",
+   "why": "sender pays at least amount"
+  },
+  {
+   "name": "setPair_owner",
+   "family": "never_when",
+   "params": {
+    "fn": "setPair",
+    "forbidden": "sender != pre(\"owner\") or pre(\"pair\") != 0"
+   },
+   "expr": "",
+   "why": "pair set once by owner"
+  },
+  {
+   "name": "pair_auth",
+   "family": "authorized_change",
+   "params": {
+    "value": "post(\"pair\")",
+    "before": "pre(\"pair\")",
+    "admin": "pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "pair protected"
+  },
+  {
+   "name": "bps_fixed",
+   "family": "authorized_change",
+   "params": {
+    "value": "post(\"sellBurnBps\")",
+    "before": "pre(\"sellBurnBps\")",
+    "admin": "pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "burn rate protected"
+  },
+  {
+   "name": "exempt_auth",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and post(\"isExempt\", u) != pre(\"isExempt\", u) and sender != pre(\"owner\")",
+   "why": "exemptions only by owner"
+  },
+  {
+   "name": "burn_bounded_by_sell",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"transfer\") and wide(pre(\"totalSupply\") - post(\"totalSupply\")) * 10000 > wide(arg(1)) * wide(pre(\"sellBurnBps\"))",
+   "why": "correction to my batch-3 addition (transfer has no arg(2); transferFrom's arg(1) is an address): a transfer burns at most the sell-tax fraction of the amount moved"
+  }
+ ],
+ "invariants": [
+  {
+   "name": "supply_eq_sum",
+   "expr": "post(\"totalSupply\") != post_sum(\"balanceOf\")",
+   "why": "supply equals sum"
+  },
+  {
+   "name": "balance_le_supply",
+   "expr": "post(\"balanceOf\", u) > post(\"totalSupply\")",
+   "why": "no balance exceeds supply"
+  }
+ ],
+ "review": {
+  "dropped": [
+   "reserves_backed0"
+  ],
+  "fixed": [
+   "burn_bounded_by_sell"
+  ],
+  "added": [
+   "burn_bounded_by_sell"
+  ]
+ }
+}

@@ -1,0 +1,269 @@
+{
+ "rules": [
+  {
+   "name": "notify_owner",
+   "family": "never_when",
+   "params": {
+    "fn": "notifyReward",
+    "forbidden": "sender != pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "only owner adds rewards"
+  },
+  {
+   "name": "acc_auth",
+   "family": "authorized_increase",
+   "params": {
+    "amount": "accRewardPerShare",
+    "admin": "pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "index only grows via owner reward"
+  },
+  {
+   "name": "acc_monotone",
+   "family": "monotone",
+   "params": {
+    "value": "post(\"accRewardPerShare\")"
+   },
+   "expr": "",
+   "why": "reward index only rises"
+  },
+  {
+   "name": "owner_auth",
+   "family": "authorized_change",
+   "params": {
+    "value": "post(\"owner\")",
+    "before": "pre(\"owner\")",
+    "admin": "pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "owner protected"
+  },
+  {
+   "name": "stake_ledger",
+   "family": "in_sync",
+   "params": {
+    "a": "post(\"totalStaked\")",
+    "b": "post_sum(\"userInfo\", \"amount\")"
+   },
+   "expr": "",
+   "why": "total staked equals sum of stakes"
+  },
+  {
+   "name": "stake_resets_debt",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"stake\") and post(\"userInfo\", sender, \"rewardDebt\") != wide(post(\"userInfo\", sender, \"amount\")) * wide(post(\"accRewardPerShare\")) // 1000000000000",
+   "why": "stake checkpoints reward debt so past rewards are not re-earned"
+  },
+  {
+   "name": "withdraw_resets_debt",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and post(\"userInfo\", sender, \"rewardDebt\") != wide(post(\"userInfo\", sender, \"amount\")) * wide(post(\"accRewardPerShare\")) // 1000000000000",
+   "why": "withdraw checkpoints reward debt so past rewards are not re-earned"
+  },
+  {
+   "name": "importLegacy_resets_debt",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"importLegacy\") and post(\"userInfo\", sender, \"rewardDebt\") != wide(post(\"userInfo\", sender, \"amount\")) * wide(post(\"accRewardPerShare\")) // 1000000000000",
+   "why": "importLegacy checkpoints reward debt so past rewards are not re-earned"
+  },
+  {
+   "name": "claim_resets_debt",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"claim\") and post(\"userInfo\", sender, \"rewardDebt\") != wide(post(\"userInfo\", sender, \"amount\")) * wide(post(\"accRewardPerShare\")) // 1000000000000",
+   "why": "claim checkpoints reward debt so past rewards are not re-earned"
+  },
+  {
+   "name": "harvest_bounded",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and not called(\"notifyReward\") and not called(\"MockToken_RWD.transferFrom\") and not called(\"MockToken_RWD.transfer\") and wide(post(\"MockToken_RWD.balanceOf\", sender) - pre(\"MockToken_RWD.balanceOf\", sender)) > wide(pre(\"userInfo\", sender, \"amount\")) * wide(pre(\"accRewardPerShare\")) // 1000000000000 - pre(\"userInfo\", sender, \"rewardDebt\")",
+   "why": "a pool call pays at most the caller's pending reward; direct reward-token transfers/transferFrom to the caller are unrelated and excluded"
+  },
+  {
+   "name": "rewards_out_only_to_sender",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and u != A0 and not called(\"MockToken_RWD.transferFrom\") and post(\"MockToken_RWD.balanceOf\", u) < pre(\"MockToken_RWD.balanceOf\", u)",
+   "why": "no reward token loss for others (excluding legitimate transferFrom by an approved spender)"
+  },
+  {
+   "name": "stake_token_no_third_party",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and u != A0 and u != A3 and not called(\"MockToken_STK.transferFrom\") and post(\"MockToken_STK.balanceOf\", u) < pre(\"MockToken_STK.balanceOf\", u)",
+   "why": "no stake token loss for others (excluding legitimate transferFrom by an approved spender)"
+  },
+  {
+   "name": "userinfo_no_third_party",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and post(\"userInfo\", u, \"amount\") < pre(\"userInfo\", u, \"amount\")",
+   "why": "no one loses stake in others' calls"
+  },
+  {
+   "name": "legacy_no_third_party",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and post(\"LegacyPool.balanceOf\", u) < pre(\"LegacyPool.balanceOf\", u)",
+   "why": "no one loses legacy balance in others' calls"
+  },
+  {
+   "name": "stake_credit",
+   "family": "exact_effect",
+   "params": {
+    "fn": "stake",
+    "value": "post(\"userInfo\", sender, \"amount\")",
+    "before": "pre(\"userInfo\", sender, \"amount\")",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "stake credits amount"
+  },
+  {
+   "name": "stake_pull",
+   "family": "exact_effect",
+   "params": {
+    "fn": "stake",
+    "value": "post(\"MockToken_STK.balanceOf\", A0)",
+    "before": "pre(\"MockToken_STK.balanceOf\", A0)",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "stake takes amount"
+  },
+  {
+   "name": "withdraw_debit",
+   "family": "exact_decrease",
+   "params": {
+    "fn": "withdraw",
+    "value": "post(\"userInfo\", sender, \"amount\")",
+    "before": "pre(\"userInfo\", sender, \"amount\")",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "withdraw debits amount"
+  },
+  {
+   "name": "withdraw_pay",
+   "family": "exact_decrease",
+   "params": {
+    "fn": "withdraw",
+    "value": "post(\"MockToken_STK.balanceOf\", A0)",
+    "before": "pre(\"MockToken_STK.balanceOf\", A0)",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "withdraw pays amount"
+  },
+  {
+   "name": "import_matches_legacy",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"importLegacy\") and post(\"userInfo\", sender, \"amount\") - pre(\"userInfo\", sender, \"amount\") != pre(\"LegacyPool.balanceOf\", sender) - post(\"LegacyPool.balanceOf\", sender)",
+   "why": "imported stake equals migrated legacy balance"
+  },
+  {
+   "name": "claim_no_stake_change",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"claim\") and (post(\"userInfo\", sender, \"amount\") != pre(\"userInfo\", sender, \"amount\") or post(\"totalStaked\") != pre(\"totalStaked\"))",
+   "why": "claim does not change stake"
+  },
+  {
+   "name": "migrate_only_migrator",
+   "family": "never_when",
+   "params": {
+    "fn": "LegacyPool.migrate",
+    "forbidden": "sender != pre(\"LegacyPool.migrator\")"
+   },
+   "expr": "",
+   "why": "only migrator migrates"
+  },
+  {
+   "name": "withdraw_exit",
+   "family": "must_succeed",
+   "params": {
+    "fn": "withdraw",
+    "condition": "arg(0) > 0 and arg(0) <= pre(\"userInfo\", sender, \"amount\")"
+   },
+   "expr": "",
+   "why": "stakers can always withdraw"
+  },
+  {
+   "name": "claim_live",
+   "family": "must_succeed",
+   "params": {
+    "fn": "claim",
+    "condition": "pre(\"userInfo\", sender, \"amount\") > 0"
+   },
+   "expr": "",
+   "why": "claims never get stuck"
+  },
+  {
+   "name": "rwd_ledger",
+   "family": "ledger",
+   "params": {
+    "accounts": "MockToken_RWD.balanceOf",
+    "total": "MockToken_RWD.totalSupply"
+   },
+   "expr": "",
+   "why": "reward token conservation"
+  },
+  {
+   "name": "import_receives_tokens",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"importLegacy\") and post(\"MockToken_STK.balanceOf\", A0) - pre(\"MockToken_STK.balanceOf\", A0) != post(\"userInfo\", sender, \"amount\") - pre(\"userInfo\", sender, \"amount\")",
+   "why": "imported stake is credited only for stake tokens actually received"
+  },
+  {
+   "name": "import_no_reward_windfall",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"importLegacy\") and wide(post(\"userInfo\", sender, \"amount\")) * wide(post(\"accRewardPerShare\")) // 1000000000000 - post(\"userInfo\", sender, \"rewardDebt\") > wide(pre(\"userInfo\", sender, \"amount\")) * wide(pre(\"accRewardPerShare\")) // 1000000000000 - pre(\"userInfo\", sender, \"rewardDebt\")",
+   "why": "adding stake must not create pending rewards for the past"
+  }
+ ],
+ "invariants": [
+  {
+   "name": "staked_eq_sum",
+   "expr": "post(\"totalStaked\") != post_sum(\"userInfo\", \"amount\")",
+   "why": "total equals sum"
+  },
+  {
+   "name": "staked_backed",
+   "expr": "post(\"totalStaked\") > post(\"MockToken_STK.balanceOf\", A0)",
+   "why": "stake tokens back stakes"
+  },
+  {
+   "name": "debt_le_accrued",
+   "expr": "post(\"userInfo\", u, \"rewardDebt\") > wide(post(\"userInfo\", u, \"amount\")) * wide(post(\"accRewardPerShare\")) // 1000000000000",
+   "why": "debt never exceeds accrued"
+  },
+  {
+   "name": "pending_backed",
+   "expr": "wide(post(\"userInfo\", u, \"amount\")) * wide(post(\"accRewardPerShare\")) // 1000000000000 - post(\"userInfo\", u, \"rewardDebt\") > post(\"MockToken_RWD.balanceOf\", A0)",
+   "why": "each user's pending reward is backed"
+  }
+ ],
+ "review": {
+  "dropped": [
+   "stake_token_sync"
+  ],
+  "fixed": [
+   "harvest_bounded",
+   "rewards_out_only_to_sender",
+   "stake_token_no_third_party"
+  ],
+  "added": [
+   "import_receives_tokens",
+   "import_no_reward_windfall"
+  ]
+ }
+}

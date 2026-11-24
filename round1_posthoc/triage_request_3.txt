@@ -1,0 +1,16 @@
+12. case C06, rule ledger: ok and post_sum("balanceOf") != post("totalSupply")
+   sequence: deposit(99) from 0x32 -> transfer(50, 50) from 0x32
+13. case C06, rule tf_allow_f: called("transferFrom") and ok and post("allowance", arg((0)), sender) + arg((2)) != pre("allowance", arg((0)), sender)
+   sequence: approve(49, 115792089237316195423570985008687907853269984665640564039457584007913129639935) from 0x31 -> deposit(49) from 0x31 -> transferFrom(49, 151, 25) from 0x31
+14. case C08, rule k_swap: ok and called("swap") and wide(post("reserve0")) * post("reserve1") < wide(pre("reserve0")) * pre("reserve1")
+   sequence: TokenC08_TKB.transfer(153, 50) from 0x32 at t=1 -> swap(990000000000000000000, 0, 50) from 0x31 at t=4294967295
+15. case C08, rule k_family: ok and wide(post("reserve0")) * post("reserve1") < wide(pre("reserve0")) * pre("reserve1")
+   sequence: TokenC08_TKB.transfer(153, 100) from 0x31 at t=1 -> swap(990000000000000000000, 0, 0) from 0x31 at t=1095216660480
+16. case C08, rule lp_value_monotone: ok and pre("totalSupply") > 0 and post("totalSupply") > 0 and wide(post("reserve0")) * post("reserve1") * pre("totalSupply") * pre("totalSupply") < wide(pre("reserve0")) * pre("reserve1") * post("totalSupply") * post("totalSupply")
+   sequence: TokenC08_TKB.transfer(153, 2) from 0x32 at t=1 -> swap(0, 499999999999999999952, 49) from 0x32 at t=4294967300
+17. case C08, rule skim_keeps_reserves: ok and called("skim") and (post("reserve0") != pre("reserve0") or post("reserve1") != pre("reserve1") or post("TokenC08_TKA.balanceOf", A0) != post("reserve0") or post("TokenC08_TKB.balanceOf", A0) != post("reserve1"))
+   sequence: TokenC08_TKB.transfer(153, 1) from 0x31 at t=1 -> skim(153) from 0x31 at t=1
+18. case C10, rule debt_synced: ok and (called("deposit") or called("withdraw") or called("harvest")) and post("userInfo", sender, "rewardDebt") != (post("userInfo", sender, "amount") * post("accRewardPerShare")) // 1000000000000
+   sequence: TokenC10_LP.transferFrom(50, 0, 99) from 0x31 at t=117300739 -> deposit(48) from 0x32 at t=2705678882 -> TokenC10_FRM.mint(50, 1178674558) from 0x32 at t=6800306548 -> deposit(54) from 0x31 at t=6800306800   (steps 0, 2 reverted)
+19. case C11, rule create_deposit_exact: ok and called("createStream") and (post("streams", ret, "deposit") != arg(1) * (arg(3) - arg(2)) or post("TokenC11.balanceOf", A0) != pre("TokenC11.balanceOf", A0) + arg(1) * (arg(3) - arg(2)))
+   sequence: withdraw(27670116110564327422, 299645294) from 0x31 at t=59929059 -> TokenC11.transferFrom(153, 2, 112) from 0x32 at t=59929059 -> withdraw(1196836561417394366447616, 113889916) from 0x31 at t=60533859 -> createStream(7, 411376139330301510538742295639337626245683966408394965837152256, 770097181, 4186379809) from 0x32 at t=60535359   (steps 0, 1, 2 reverted)

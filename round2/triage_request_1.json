@@ -1,0 +1,392 @@
+[
+ {
+  "n": 1,
+  "case": "R01",
+  "rule": "create_records_lock",
+  "attack": [
+   "createLock(49, 4, 100) from 0x32 at t=1",
+   "MockToken.approve(1, 590295810358705651711) from 0x31 at t=27",
+   "createLock(590295810358705651711, 3, 18446744073709551615) from 0x32 at t=295147905179352825856"
+  ],
+  "reverted": [
+   false,
+   false,
+   false
+  ]
+ },
+ {
+  "n": 2,
+  "case": "R01",
+  "rule": "release_updates_lock_shares",
+  "attack": [
+   "createLock(50, 2, 1) from 0x32 at t=292688939782808535031",
+   "release(1) from 0x31 at t=461966673916487270393",
+   "release(1) from 0x32 at t=498860162063906373624"
+  ],
+  "reverted": [
+   false,
+   true,
+   false
+  ]
+ },
+ {
+  "n": 3,
+  "case": "R01",
+  "rule": "totalShares_in_sync_locks",
+  "attack": [
+   "release(0) from 0x31 at t=3"
+  ],
+  "reverted": [
+   false
+  ]
+ },
+ {
+  "n": 4,
+  "case": "R02",
+  "rule": "deposit_record",
+  "attack": [
+   "withdraw(0) from 0x31 at t=18446744073678015616 [attacker calls back extend(0, 1)]",
+   "deposit(98304) from 0x32 sending 4995993186629670229 wei at t=32281802128991715327 [attacker calls back topUp(1)]"
+  ],
+  "reverted": [
+   false,
+   false
+  ]
+ },
+ {
+  "n": 5,
+  "case": "R02",
+  "rule": "owner_changes_only_via_move",
+  "attack": [
+   "deposit(131160) from 0x32 sending 388313981572349952 wei at t=10376293541600559144",
+   "withdraw(1) from 0x32 at t=14213360423994458111 [attacker calls back moveOwnership(1, 5568513)]"
+  ],
+  "reverted": [
+   false,
+   false
+  ]
+ },
+ {
+  "n": 6,
+  "case": "R03",
+  "rule": "withdraw_fair_custom",
+  "attack": [
+   "withdraw(0) from 0x31"
+  ],
+  "reverted": [
+   false
+  ]
+ },
+ {
+  "n": 7,
+  "case": "R03",
+  "rule": "withdraw_zero_pays_nothing",
+  "attack": [
+   "withdraw(0) from 0x31"
+  ],
+  "reverted": [
+   false
+  ]
+ },
+ {
+  "n": 8,
+  "case": "R04",
+  "rule": "delegate_over_balance",
+  "attack": [
+   "undelegate(95780971304118053647396689196894323976171195136475136) from 0x31",
+   "delegate(11) from 0x32"
+  ],
+  "reverted": [
+   true,
+   false
+  ]
+ },
+ {
+  "n": 9,
+  "case": "R04",
+  "rule": "delegate_debits",
+  "attack": [
+   "undelegate(95780971304118053647396689196894323976171195136475136) from 0x31",
+   "delegate(11) from 0x32"
+  ],
+  "reverted": [
+   true,
+   false
+  ]
+ },
+ {
+  "n": 10,
+  "case": "R04",
+  "rule": "conservation",
+  "attack": [
+   "undelegate(95780971304118053647396689196894323976171195136475136) from 0x31",
+   "delegate(11) from 0x32"
+  ],
+  "reverted": [
+   true,
+   false
+  ]
+ },
+ {
+  "n": 11,
+  "case": "R04",
+  "rule": "balance_bounded",
+  "attack": [
+   "undelegate(95780971304118053647396689196894323976171195136475136) from 0x31",
+   "delegate(11) from 0x32"
+  ],
+  "reverted": [
+   true,
+   false
+  ]
+ },
+ {
+  "n": 12,
+  "case": "R04",
+  "rule": "balance_no_wrap",
+  "attack": [
+   "undelegate(95780971304118053647396689196894323976171195136475136) from 0x31",
+   "delegate(11) from 0x32"
+  ],
+  "reverted": [
+   true,
+   false
+  ]
+ },
+ {
+  "n": 13,
+  "case": "R04",
+  "rule": "no_third_party_balance_loss",
+  "attack": [
+   "delegate(1500) from 0x32",
+   "transfer(50, 18000000000000000000) from 0x31"
+  ],
+  "reverted": [
+   false,
+   false
+  ]
+ },
+ {
+  "n": 14,
+  "case": "R04",
+  "rule": "transfer_conserves",
+  "attack": [
+   "delegate(1500) from 0x32",
+   "transfer(50, 18000000000000000000) from 0x31"
+  ],
+  "reverted": [
+   false,
+   false
+  ]
+ },
+ {
+  "n": 15,
+  "case": "R04",
+  "rule": "transfer_exact",
+  "attack": [
+   "delegate(1500) from 0x32",
+   "transfer(50, 18000000000000000000) from 0x31"
+  ],
+  "reverted": [
+   false,
+   false
+  ]
+ },
+ {
+  "n": 16,
+  "case": "R04",
+  "rule": "undelegate_credits",
+  "attack": [
+   "delegate(50) from 0x32",
+   "undelegate(50) from 0x32"
+  ],
+  "reverted": [
+   false,
+   false
+  ]
+ },
+ {
+  "n": 17,
+  "case": "R05",
+  "rule": "withdraw_fee_floor",
+  "attack": [
+   "collectFees(49) from 0x31",
+   "setMinFee(1208925819614629174706176) from 0x32",
+   "MockToken.mint(50, 3332929152) from 0x32",
+   "withdraw(122970482, 112, 411376139330301510538742295639337626245683966408394965837152255) from 0x31"
+  ],
+  "reverted": [
+   true,
+   true,
+   true,
+   false
+  ]
+ },
+ {
+  "n": 18,
+  "case": "R06",
+  "rule": "rebalance_only_current",
+  "attack": [
+   "setRebalancer(51) from 0x31",
+   "rebalance(153, 105570665) from 0x33"
+  ],
+  "reverted": [
+   true,
+   false
+  ]
+ },
+ {
+  "n": 19,
+  "case": "R06",
+  "rule": "deposit_nonzero",
+  "attack": [
+   "MockToken.transfer(50, 30869802006268626521237433452617706752280171973410646069311967096566886602137) from 0x31",
+   "withdraw(422866995) from 0x31",
+   "MockToken.mint(152, 24519928653854221733733552434404946937899825954937634815) from 0x33",
+   "deposit(16) from 0x31"
+  ],
+  "reverted": [
+   true,
+   false,
+   true,
+   false
+  ]
+ },
+ {
+  "n": 20,
+  "case": "R07",
+  "rule": "deposit_fair",
+  "attack": [
+   "MockToken_A.transfer(49, 5192296858534827628530496329220096) from 0x31",
+   "depositMulti(32, 1, 4722366482869645213695, 696139154, 6277101735386680763835789423207666416102355444464034512897) from 0x31",
+   "depositMulti(32, 1, 20000000000000000000, 117300738, 340282366920938463463374607431768211456) from 0x32"
+  ],
+  "reverted": [
+   true,
+   true,
+   false
+  ]
+ },
+ {
+  "n": 21,
+  "case": "R07",
+  "rule": "share_price_monotone",
+  "attack": [
+   "MockToken_A.transfer(49, 5192296858534827628530496329220096) from 0x31",
+   "depositMulti(32, 1, 4722366482869645213695, 696139154, 6277101735386680763835789423207666416102355444464034512897) from 0x31",
+   "depositMulti(32, 1, 20000000000000000000, 117300738, 340282366920938463463374607431768211456) from 0x32"
+  ],
+  "reverted": [
+   true,
+   true,
+   false
+  ]
+ },
+ {
+  "n": 22,
+  "case": "R08",
+  "rule": "importLegacy_resets_debt",
+  "attack": [
+   "LegacyPool.deposit(129) from 0x32",
+   "LegacyPool.deposit(46) from 0x32",
+   "importLegacy() from 0x32"
+  ],
+  "reverted": [
+   false,
+   false,
+   false
+  ]
+ },
+ {
+  "n": 23,
+  "case": "R08",
+  "rule": "import_no_reward_windfall",
+  "attack": [
+   "LegacyPool.deposit(129) from 0x32",
+   "LegacyPool.deposit(46) from 0x32",
+   "importLegacy() from 0x32"
+  ],
+  "reverted": [
+   false,
+   false,
+   false
+  ]
+ },
+ {
+  "n": 24,
+  "case": "R09",
+  "rule": "ledger",
+  "attack": [
+   "transfer(0, 2000) from 0x31",
+   "MockToken.transferFrom(50, 49, 20000000000000000000) from 0x32",
+   "MockToken.transfer(151, 404098525) from 0x31"
+  ],
+  "reverted": [
+   true,
+   true,
+   false
+  ]
+ },
+ {
+  "n": 25,
+  "case": "R09",
+  "rule": "pair_product",
+  "attack": [
+   "transfer(151, 252) from 0x32"
+  ],
+  "reverted": [
+   false
+  ]
+ },
+ {
+  "n": 26,
+  "case": "R11",
+  "rule": "deposit_fair",
+  "attack": [
+   "MockToken.approve(152, 990000000) from 0x32",
+   "transfer(153, 141478433) from 0x32",
+   "MockToken.mint(49, 1239111706) from 0x32",
+   "deposit(306533968) from 0x31"
+  ],
+  "reverted": [
+   false,
+   true,
+   true,
+   false
+  ]
+ },
+ {
+  "n": 27,
+  "case": "R11",
+  "rule": "deposit_pulls_something",
+  "attack": [
+   "MockToken.approve(152, 990000000) from 0x32",
+   "transfer(153, 141478433) from 0x32",
+   "MockToken.mint(49, 1239111706) from 0x32",
+   "deposit(306533968) from 0x31"
+  ],
+  "reverted": [
+   false,
+   true,
+   true,
+   false
+  ]
+ },
+ {
+  "n": 28,
+  "case": "R11",
+  "rule": "share_price_monotone",
+  "attack": [
+   "MockToken.approve(152, 990000000) from 0x32",
+   "transfer(153, 141478433) from 0x32",
+   "MockToken.mint(49, 1239111706) from 0x32",
+   "deposit(306533968) from 0x31"
+  ],
+  "reverted": [
+   false,
+   true,
+   true,
+   false
+  ]
+ }
+]

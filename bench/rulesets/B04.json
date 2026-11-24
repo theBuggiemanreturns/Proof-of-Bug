@@ -1,0 +1,18 @@
+{
+ "case": "B04",
+ "rules": {
+  "ledger": "ok and post_sum(\"balanceOf\") != post(\"totalSupply\")",
+  "mint_works": "called(\"mint\") and reverted and (sender == pre(\"owner\"))",
+  "xfer_works": "called(\"transfer\") and reverted and (arg(1) <= pre(\"balanceOf\", sender))",
+  "auth_mint": "ok and sender != pre(\"owner\") and post(\"totalSupply\") > pre(\"totalSupply\")",
+  "mint_supply": "called(\"mint\") and ok and post(\"totalSupply\") != pre(\"totalSupply\") + arg(1)",
+  "mint_to": "called(\"mint\") and ok and post(\"balanceOf\", arg(0)) != pre(\"balanceOf\", arg(0)) + arg(1)",
+  "xfer_from": "called(\"transfer\") and ok and arg(0) != sender and post(\"balanceOf\", sender) + arg(1) != pre(\"balanceOf\", sender)",
+  "xfer_to": "called(\"transfer\") and ok and arg(0) != sender and post(\"balanceOf\", arg(0)) != pre(\"balanceOf\", arg(0)) + arg(1)"
+ },
+ "strength": 0.9,
+ "holds_by_construction": [],
+ "invariants": {
+  "ledger_inv": "post_sum(\"balanceOf\") != post(\"totalSupply\")"
+ }
+}

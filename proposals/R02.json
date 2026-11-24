@@ -1,0 +1,66 @@
+{
+ "rules": [
+  {
+   "name": "auth_owner",
+   "family": "authorized_change",
+   "params": {
+    "value": "post(\"owner\")",
+    "before": "pre(\"owner\")",
+    "admin": "pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "only the owner changes the owner"
+  },
+  {
+   "name": "init_once",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and pre(\"initialized\") != 0 and post(\"initialized\") != pre(\"initialized\")",
+   "why": "initialisation can't be undone or redone"
+  },
+  {
+   "name": "exec_owner",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"execute\") and ok and sender != pre(\"owner\")",
+   "why": "only the owner spends"
+  },
+  {
+   "name": "exec_balance",
+   "family": "exact_decrease",
+   "params": {
+    "fn": "execute",
+    "value": "post(\"balance\")",
+    "before": "pre(\"balance\")",
+    "delta": "arg(1)"
+   },
+   "expr": "",
+   "why": "spending lowers the balance exactly"
+  },
+  {
+   "name": "exec_paid",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"execute\") and ok and post(\"paidOut\", arg(0)) != pre(\"paidOut\", arg(0)) + arg(1)",
+   "why": "the recipient is paid exactly"
+  },
+  {
+   "name": "conserved",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and post_sum(\"paidOut\") + post(\"balance\") != pre_sum(\"paidOut\") + pre(\"balance\")",
+   "why": "money is neither created nor destroyed"
+  },
+  {
+   "name": "exec_works",
+   "family": "must_succeed",
+   "params": {
+    "fn": "execute",
+    "condition": "sender == pre(\"owner\") and arg(1) <= pre(\"balance\")"
+   },
+   "expr": "",
+   "why": "the owner can always spend what's there"
+  }
+ ],
+ "invariants": []
+}

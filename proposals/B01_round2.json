@@ -1,0 +1,110 @@
+{
+ "rules": [
+  {
+   "name": "nonzero",
+   "family": "nonzero_mint",
+   "params": {
+    "fn": "deposit",
+    "amount_arg": "0"
+   },
+   "expr": "",
+   "why": "paying in must always mint something"
+  },
+  {
+   "name": "deposit_assets",
+   "family": "exact_effect",
+   "params": {
+    "fn": "deposit",
+    "value": "post(\"totalAssets\")",
+    "before": "pre(\"totalAssets\")",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "a deposit raises assets by exactly the amount"
+  },
+  {
+   "name": "deposit_supply",
+   "family": "exact_effect",
+   "params": {
+    "fn": "deposit",
+    "value": "post(\"totalSupply\")",
+    "before": "pre(\"totalSupply\")",
+    "delta": "ret"
+   },
+   "expr": "",
+   "why": "the shares minted are exactly the shares reported"
+  },
+  {
+   "name": "donate_assets",
+   "family": "exact_effect",
+   "params": {
+    "fn": "donate",
+    "value": "post(\"totalAssets\")",
+    "before": "pre(\"totalAssets\")",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "a donation raises assets by exactly the amount"
+  },
+  {
+   "name": "donate_supply",
+   "family": "no_side_effect",
+   "params": {
+    "fn": "donate",
+    "value": "post(\"totalSupply\")",
+    "before": "pre(\"totalSupply\")"
+   },
+   "expr": "",
+   "why": "a donation never mints shares"
+  },
+  {
+   "name": "fair_mint",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"deposit\") and ok and pre(\"totalSupply\") > 0 and wide(ret) * pre(\"totalAssets\") > wide(arg(0)) * pre(\"totalSupply\")",
+   "why": "a depositor never gets more shares than their fair fraction"
+  },
+  {
+   "name": "first_mint",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"deposit\") and ok and pre(\"totalSupply\") == 0 and ret != arg(0)",
+   "why": "the first deposit mints 1:1"
+  },
+  {
+   "name": "share_price",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and pre(\"totalSupply\") > 0 and post(\"totalSupply\") > 0 and wide(post(\"totalAssets\")) * pre(\"totalSupply\") < wide(pre(\"totalAssets\")) * post(\"totalSupply\")",
+   "why": "refined after triage: existing holders are never diluted (only meaningful when shares exist)"
+  },
+  {
+   "name": "fair_floor",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"deposit\") and ok and pre(\"totalSupply\") > 0 and wide(ret + 1) * pre(\"totalAssets\") <= wide(arg(0)) * pre(\"totalSupply\")",
+   "why": "from survivors: a depositor is never short-changed by a whole share or more"
+  },
+  {
+   "name": "deposit_works",
+   "family": "must_succeed",
+   "params": {
+    "fn": "deposit",
+    "condition": "arg(0) > 0 and (pre(\"totalSupply\") == 0 or wide(arg(0)) * pre(\"totalSupply\") >= pre(\"totalAssets\"))"
+   },
+   "expr": "",
+   "why": "from survivors: a deposit worth at least one share must go through"
+  },
+  {
+   "name": "donate_works",
+   "family": "must_succeed",
+   "params": {
+    "fn": "donate",
+    "condition": "arg(0) >= 0"
+   },
+   "expr": "",
+   "why": "from survivors: donations never fail"
+  }
+ ],
+ "invariants": []
+}

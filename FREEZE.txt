@@ -1,0 +1,56 @@
+44a6dcf344fad05b39d8792330ab754a1c2e949c43f30988268abc9f398e7d58  proofofbug/families.py
+b80fff05c97551a8763cf832bfdf04fc859fc796b5b149608e7b29ae97c6e4b5  proofofbug/rulelang.py
+734c6a6f6358d3a9c4b07c86bf7b3167e8d5b1c16ad9b45d0b966e0872e6e4cb  proofofbug/agent.py
+457a6632747f1f93d55ef393844f328717120a37d2d85353d24873fe253439e5  bench/library.py
+frozen at 2026-11-23T12:04:49Z, before any blind contract was received
+
+# v2 (adds the ETH pseudo-variable to the rule language text; still before any blind contract was received)
+44a6dcf344fad05b39d8792330ab754a1c2e949c43f30988268abc9f398e7d58  proofofbug/families.py
+33430e3bed39eac3681cba58b52103154af79bf2bc987a4eb9430a60c1285d51  proofofbug/rulelang.py
+51242bf0d4d2ce22654e56ae65c1547bd877637d47ee5a2474c44cc8755516e6  proofofbug/agent.py
+457a6632747f1f93d55ef393844f328717120a37d2d85353d24873fe253439e5  bench/library.py
+frozen at 2026-11-23T12:09:48Z
+
+# v3 AFTER the blind contracts were received (2026-11-23T13:56Z). Change: the rule-language text adds struct-field access
+# (pre("orders", id, "amount")) and says id-keyed mappings take ids as keys. Reason: 4 of the 12 contracts keep their state in
+# structs, which no rule could name before. A language capability, applied to all cases; no family or rule changed (families.py hash unchanged).
+44a6dcf344fad05b39d8792330ab754a1c2e949c43f30988268abc9f398e7d58  proofofbug/families.py
+33430e3bed39eac3681cba58b52103154af79bf2bc987a4eb9430a60c1285d51  proofofbug/rulelang.py
+7d734d0835a8dc641a61e35490cd9ed94dbe47a41b9629b8afe5c639046b3496  proofofbug/agent.py
+457a6632747f1f93d55ef393844f328717120a37d2d85353d24873fe253439e5  bench/library.py
+frozen at 2026-11-23T14:09:59Z
+
+# v4 AFTER the reveal (19:16 UTC): family templates bracket expression blanks (now - {start} with start = a - b
+# was pasted as now - a - b). Found by the post-reveal counterexample replay on C02. No blind verdict depended on it.
+e0a4b8f0c3dd44c5a52105d401532b5ff53d35d09b582bb9775c45a9ec2b450c  proofofbug/families.py
+425560da17c19f6e01aa28c20f8bf645c4d636da1d241165893f0ca0d8eed989  proofofbug/rulelang.py
+c6d4891683c032253cc8ae0cfe9f5322cb9b95899180d6e6a41c87c0ef4834a5  proofofbug/agent.py
+457a6632747f1f93d55ef393844f328717120a37d2d85353d24873fe253439e5  bench/library.py
+recorded at 2026-11-23T19:21:09Z
+
+# v5 before round 2 (search portfolio: fuzzing, exact search, counterexample replay; size reporting; rule review step).
+e0a4b8f0c3dd44c5a52105d401532b5ff53d35d09b582bb9775c45a9ec2b450c  proofofbug/families.py
+425560da17c19f6e01aa28c20f8bf645c4d636da1d241165893f0ca0d8eed989  proofofbug/rulelang.py
+c6d4891683c032253cc8ae0cfe9f5322cb9b95899180d6e6a41c87c0ef4834a5  proofofbug/agent.py
+457a6632747f1f93d55ef393844f328717120a37d2d85353d24873fe253439e5  bench/library.py
+98a354db1f79292ac7f15667dca6ce761fa437e4204de58b618367fd2e9f1514  proofofbug/blind.py
+8b3ec665db98ff20adb2ef3dbb68abe51208517a4e829830a6e84812d2c722db  proofofbug/exact.py
+3f14bc97c8a615e861529168a88231b975ea23be478d1b8ac46a7d365d32632b  proofofbug/fuzz.py
+frozen at 2026-11-24T02:29:42Z, before any round-2 contract was received
+
+# v6 after round 2 post-reveal fixes (ETH in exact engine/prover, solver loop bounds, two-window circuit, deployed-state width, multi-slot variables, deployer in universe, unconfirmed rules kept open).
+e0a4b8f0c3dd44c5a52105d401532b5ff53d35d09b582bb9775c45a9ec2b450c  proofofbug/families.py
+425560da17c19f6e01aa28c20f8bf645c4d636da1d241165893f0ca0d8eed989  proofofbug/rulelang.py
+c6d4891683c032253cc8ae0cfe9f5322cb9b95899180d6e6a41c87c0ef4834a5  proofofbug/agent.py
+457a6632747f1f93d55ef393844f328717120a37d2d85353d24873fe253439e5  bench/library.py
+2d807da1f0dd24b67be6518cc816fdf35e05cb441218c7be79d29ac6e2b58c22  proofofbug/blind.py
+7432211640c764055bd5494d2f7c073d09ab557f57bf1299b35ec3d008fafa0c  proofofbug/exact.py
+5782383ff3f0d84ed022778646ed98add6a8f5d1e9a962c2bdd186509ff91e4a  proofofbug/fuzz.py
+bca1bd8b11af3e3461bea23ba2e90c453e2f915e9a28c911b960fe87e4f3aaa9  proofofbug/intproof.py
+6a72f1f8256d38ea45d192cb32dd25c92cbd57c430363a57a57e8cfa980d8f0d  proofofbug/symexec.py
+b6a3cc42ffc78d335e98c30a41c37c9250dc6bca660de52df58034b46292559f  proofofbug/model.py
+a227c680f44a3413b3fcdfdd3f0a524f3dd0f081f2a41db5736babce6f07f95b  proofofbug/check.py
+ffbac10d3b9ed0c783f18f3de4cf2243e269aca200214af32f909e9ed520f09c  proofofbug/bench.py
+3665e38393d64737f1b36e7d972937fcc0297c9888f4b8172bb8def528b0352a  proofofbug/yul.py
+92059edf29989bec256891ba83b67ab65e24eac7dad62fdfb2b82b5824edd4d8  proofofbug/evm.py
+frozen at 2026-11-24T13:19:57Z, before any round-3 contract

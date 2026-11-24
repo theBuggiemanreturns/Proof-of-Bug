@@ -1,0 +1,26 @@
+{
+ "drop": [
+  {
+   "name": "backing_in_sync",
+   "why": "over-claims: anyone can send tokens straight to A0 with MockToken.transfer, which changes the held balance without changing liabilities; correct behaviour would trip it. backing_bound and the 'backed' invariant cover the real property"
+  }
+ ],
+ "fix": [
+  {
+   "name": "no_third_party_token_loss",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and u != A0 and not called(\"MockToken.transferFrom\") and post(\"MockToken.balanceOf\", u) < pre(\"MockToken.balanceOf\", u)",
+   "why": "no token loss for others; direct MockToken.transferFrom by an approved spender is legitimate and excluded"
+  }
+ ],
+ "add": [
+  {
+   "name": "withdraw_fee_nonnegative_effect",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and post(\"feesAccrued\") < pre(\"feesAccrued\")",
+   "why": "withdrawals never reduce fees owed to the protocol"
+  }
+ ]
+}

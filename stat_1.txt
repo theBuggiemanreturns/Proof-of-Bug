@@ -1,0 +1,16 @@
+
+11. Printing statistics.
+
+=== vault ===
+
+   Number of wires:               2542
+   Number of wire bits:           3336
+   Number of public wires:         123
+   Number of public wire bits:     917
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:               2420
+     $_NAND_                      1733
+     $_NOT_                        687
+

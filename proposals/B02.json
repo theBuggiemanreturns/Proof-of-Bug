@@ -1,0 +1,171 @@
+{
+ "rules": [
+  {
+   "name": "ledger",
+   "family": "ledger",
+   "params": {
+    "accounts": "shares",
+    "total": "totalSupply"
+   },
+   "expr": "",
+   "why": "shares add up to supply"
+  },
+  {
+   "name": "dep_assets",
+   "family": "exact_effect",
+   "params": {
+    "fn": "deposit",
+    "value": "post(\"totalAssets\")",
+    "before": "pre(\"totalAssets\")",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "deposit adds exactly its amount"
+  },
+  {
+   "name": "dep_supply",
+   "family": "exact_effect",
+   "params": {
+    "fn": "deposit",
+    "value": "post(\"totalSupply\")",
+    "before": "pre(\"totalSupply\")",
+    "delta": "ret"
+   },
+   "expr": "",
+   "why": "deposit mints exactly what it reports"
+  },
+  {
+   "name": "dep_mine",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"deposit\") and ok and post(\"shares\", sender) != pre(\"shares\", sender) + ret",
+   "why": "depositor gets the minted shares"
+  },
+  {
+   "name": "wd_supply",
+   "family": "exact_decrease",
+   "params": {
+    "fn": "withdraw",
+    "value": "post(\"totalSupply\")",
+    "before": "pre(\"totalSupply\")",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "withdraw burns exactly the shares"
+  },
+  {
+   "name": "wd_assets",
+   "family": "exact_decrease",
+   "params": {
+    "fn": "withdraw",
+    "value": "post(\"totalAssets\")",
+    "before": "pre(\"totalAssets\")",
+    "delta": "ret"
+   },
+   "expr": "",
+   "why": "withdraw pays out exactly what it reports"
+  },
+  {
+   "name": "wd_mine",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"withdraw\") and ok and post(\"shares\", sender) + arg(0) != pre(\"shares\", sender)",
+   "why": "withdrawer's shares go down exactly"
+  },
+  {
+   "name": "fair_out",
+   "family": "fair_redemption",
+   "params": {
+    "fn": "withdraw",
+    "shares_arg": "0",
+    "assets": "totalAssets",
+    "shares": "totalSupply"
+   },
+   "expr": "",
+   "why": "never pays more than the fair fraction"
+  },
+  {
+   "name": "fair_out_floor",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"withdraw\") and ok and wide(ret + 1) * pre(\"totalSupply\") <= wide(arg(0)) * pre(\"totalAssets\")",
+   "why": "never short-changes by a whole unit"
+  },
+  {
+   "name": "fair_in",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"deposit\") and ok and pre(\"totalSupply\") > 0 and wide(ret) * pre(\"totalAssets\") > wide(arg(0)) * pre(\"totalSupply\")",
+   "why": "never mints more than fair"
+  },
+  {
+   "name": "fair_in_floor",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"deposit\") and ok and pre(\"totalSupply\") > 0 and wide(ret + 1) * pre(\"totalAssets\") <= wide(arg(0)) * pre(\"totalSupply\")",
+   "why": "never mints a whole share too few"
+  },
+  {
+   "name": "don_assets",
+   "family": "exact_effect",
+   "params": {
+    "fn": "donate",
+    "value": "post(\"totalAssets\")",
+    "before": "pre(\"totalAssets\")",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "donation adds exactly its amount"
+  },
+  {
+   "name": "don_supply",
+   "family": "no_side_effect",
+   "params": {
+    "fn": "donate",
+    "value": "post(\"totalSupply\")",
+    "before": "pre(\"totalSupply\")"
+   },
+   "expr": "",
+   "why": "donation mints nothing"
+  },
+  {
+   "name": "price",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and pre(\"totalSupply\") > 0 and post(\"totalSupply\") > 0 and wide(post(\"totalAssets\")) * pre(\"totalSupply\") < wide(pre(\"totalAssets\")) * post(\"totalSupply\")",
+   "why": "holders never diluted"
+  },
+  {
+   "name": "exit",
+   "family": "exit_amount",
+   "params": {
+    "fn": "withdraw",
+    "amount_arg": "0",
+    "balance": "shares"
+   },
+   "expr": "",
+   "why": "you can always withdraw your own shares"
+  },
+  {
+   "name": "enter",
+   "family": "must_succeed",
+   "params": {
+    "fn": "deposit",
+    "condition": "arg(0) > 0 and (pre(\"totalSupply\") == 0 or wide(arg(0)) * pre(\"totalSupply\") >= pre(\"totalAssets\"))"
+   },
+   "expr": "",
+   "why": "a deposit worth a share goes through"
+  },
+  {
+   "name": "nonzero",
+   "family": "nonzero_mint",
+   "params": {
+    "fn": "deposit",
+    "amount_arg": "0"
+   },
+   "expr": "",
+   "why": "paying in always mints something"
+  }
+ ],
+ "invariants": []
+}

@@ -1,0 +1,301 @@
+You are writing safety rules for smart contracts. A solver searches for transaction
+sequences that break your rules, and every rule is then checked by machine: it must not fire on
+the contract as intended, and it is scored by how many deliberately broken copies of the contract
+it catches. Rules that fire on correct behaviour are thrown away, so state what must ALWAYS hold.
+
+Prefer filling a rule family (a general law) over a custom rule. Cover every function: what each
+must change, by how much, what it must never change, who may call it, and what can never be
+created from nothing. Also give invariants (state facts) that make the rules provable.
+
+Checklist (from ~900 public audit findings; each item names the families that express it):
+- Sibling entry points (deposit/mint, withdraw/withdrawTo/redeem, vote/changeVote, create/update/
+  cancel): every check one sibling enforces, write it as a rule for EVERY sibling (never_when,
+  frozen_when, no_third_party_loss). Every amount one sibling takes in, its reverse must give back.
+- Early returns / fast paths: every record the slow path updates must also move on the fast path
+  (in_sync, ledger).
+- Two records that stand for the same value (a total and the sum of a mapping, booked assets and
+  a token balance): in_sync, ledger, bounded_by.
+- Value from nothing: rounding in the caller's favour, first deposit, donations, paying more than
+  was funded or than time allows (fair_redemption, share_price_monotone, nonzero_mint, bounded_by,
+  accrual_bounded).
+- Who can move whose funds: no_third_party_loss, no_loss_beyond_allowance, authorized_change.
+- Time: locks, deadlines, vesting, voting windows, rate limits (never_when, frozen_when,
+  rate_limited, accrual_bounded); counters and indices that must only rise (monotone).
+- Liveness: an honest user can always get their funds out (exit_all, exit_amount, must_succeed).
+
+Families (fill every blank; blank values are rule-language fragments or names):
+- ledger: The per-account records add up to the recorded total.
+    accounts: mapping of per-account amounts, e.g. balanceOf
+    total: the recorded total, e.g. totalSupply
+- bounded_by: Something owed or paid out never exceeds what backs it (no value from nothing).
+    amount: rule expression for what is owed / paid out / credited
+    backing: rule expression for what backs it
+- account_bounded_by: For every account: what it took out never exceeds what it put in (or its limit).
+    taken: per-account amount out, using u, e.g. post("paidOut", u)
+    limit: per-account limit, using u, e.g. post("deposited", u)
+- nonzero_mint: Paying something in always gets something back.
+    fn: the deposit/mint function
+    amount_arg: index of the amount argument
+- fair_redemption: Redeeming never pays more than the redeemed fraction of the pool.
+    fn: the withdraw/redeem function
+    shares_arg: index of the shares argument
+    assets: pool assets variable
+    shares: total shares variable
+- share_price_monotone: Assets per share never drop for the holders who remain.
+    assets: pool assets variable
+    shares: total shares variable
+- product_monotone: A constant-product pool's x*y never shrinks.
+    x: reserve x variable
+    y: reserve y variable
+- authorized_change: Only the admin can change a protected value.
+    value: protected rule expression, e.g. post("owner")
+    before: the same value before the call, e.g. pre("owner")
+    admin: who is allowed, e.g. pre("owner")
+- authorized_increase: Only the admin can increase a protected amount (e.g. supply).
+    amount: variable
+    admin: who is allowed, e.g. pre("owner")
+- allowance_spent: Spending on someone's behalf uses up exactly that much allowance.
+    fn: transferFrom-like function
+    allowance: allowance mapping (owner => spender => amount)
+    owner_arg: index of the owner argument
+    amount_arg: index of the amount argument
+- breaker_hold: A tripped circuit breaker can't be reset while the danger remains.
+    flag: paused flag variable
+    danger: rule expression for the danger, e.g. post("reserves") < 10
+- exact_effect: A successful call changes a variable by exactly the amount it stands for.
+    fn: the function
+    value: variable reference after the call, e.g. post("totalAssets")
+    before: the same before the call, e.g. pre("totalAssets")
+    delta: the expected increase, e.g. arg(0)
+- exact_decrease: A successful call lowers a variable by exactly the amount it stands for.
+    fn: the function
+    value: variable after, e.g. post("held")
+    before: variable before
+    delta: the expected decrease
+- no_side_effect: A function leaves a variable it has no business changing untouched.
+    fn: the function
+    value: variable after, e.g. post("totalSupply")
+    before: variable before
+- must_succeed: A call that meets its stated conditions must not fail (nothing gets stuck or blocked).
+    fn: the function
+    condition: rule expression saying when the call should work
+- exit_all: Someone with funds in the system can always take them out (nothing gets stuck).
+    fn: the withdraw-everything function (no amount argument)
+    balance: per-account balance mapping
+- exit_amount: Withdrawing part of your own balance always works (nothing gets stuck).
+    fn: the withdraw(amount) function
+    amount_arg: index of the amount argument
+    balance: per-account balance mapping
+- collateralized: Every borrower stays within their limit at the fair price.
+    debt: debt mapping
+    collateral: collateral mapping
+    price: fair price expression
+    ratio: debt multiplier in the limit (e.g. 2 for 50% LTV)
+- no_third_party_loss: Nobody loses what they hold in a call they did not make. (ACC-03, ACC-06, REN-02, EMG-03: missing or wrong authorization, unchecked callbacks)
+    balance: per-account holdings mapping, e.g. balanceOf or deposits
+- no_loss_beyond_allowance: Someone else's call can take from you at most what you approved them for. (ACC-03, TOK-04, approval-drain incidents)
+    balance: per-account holdings mapping
+    allowance: approval mapping (owner => spender => amount)
+- in_sync: Two records that stand for the same value always change by the same amount. (ACD-01, ACD-02, ACD-03, INC-02, XCH-03, VLT-04: one path updates one record and not the other)
+    a: first record after the call, e.g. post("totalDeposits")
+    b: second record after the call, e.g. post_sum("deposits") or post("Token.balanceOf", A0)
+- frozen_when: While a condition holds, a value cannot change (paused, finalized, closed, after a snapshot). (GOV-02, ACC-05, RUG-05, BND-02)
+    value: the value after the call, e.g. post("votes", sender)
+    condition: when it is frozen, from the state before the call, e.g. pre("finalized") != 0 or now >= pre("deadline")
+- never_when: A function never succeeds when a condition says it must not (too early, too late, wrong caller, wrong state). Apply it to EVERY sibling entry point. (ACC-03, INC-03, BND-01, BND-02, LIQ-04)
+    fn: the function
+    forbidden: when it must fail, e.g. now < pre("unlockTime", sender)
+- bounded_step: A value moves by at most a limit in one call (fees, prices, rates, parameters). (ACC-05, RUG-03, ORC-01, ORC-06)
+    value: the value after the call, e.g. post("fee")
+    limit: largest allowed change in one call
+- monotone: A counter, nonce or accumulated index only goes up. (SIG-02 nonces, GOV-01/VLT-06 reward and interest indices, cumulative totals)
+    value: the value after the call, e.g. post("rewardPerTokenStored")
+- rate_limited: A protected value changes at most once per interval. (ACC-05 timelock bypass, LIQ-04)
+    value: the value after the call, e.g. post("multiplier")
+    last: when it last changed, before the call, e.g. pre("lastUpdate")
+    interval: minimum time between changes
+- accrual_bounded: What is paid out over time never exceeds the rate times the time elapsed. (GOV-01, VLT-06, RND-04)
+    paid: total paid or accrued after the call, e.g. post("totalClaimed")
+    rate: rate per second, e.g. post("rewardRate")
+    start: when accrual started, e.g. post("startTime")
+
+Rule language (an expression that is TRUE when a transaction BREAKS the rule):
+  ok / reverted                  did the call succeed
+  called("fn")                   the transaction called function fn ("Contract.fn" for another contract)
+  arg(i)                         i-th argument of the call;  sender  the caller;  ret  first return value
+  now                            the time of the call (block.timestamp)
+  pre("var", key...) / post(...) storage before / after the call; keys for mappings (e.g. sender, arg(0), U0)
+  pre_sum("map") / post_sum(...) sum of a mapping over all accounts
+  pre("orders", arg(0), "amount") a struct field: keys first, then the field name in quotes;
+                                 post_sum("userInfo", "amount") sums one field over all accounts
+                                 (mappings keyed by ids, e.g. order ids 1, 2, 3..., take ids as keys)
+  wide(x)                        use for products so they never overflow
+  and, or, not, + - * //, < <= > >= == !=   (no chained comparisons)
+  "Contract.var" reads another contract's storage; A0, A1 are contract addresses, U0, U1 users.
+  pre("ETH", x) / post("ETH", x) the ETH balance of account x (e.g. A0 the contract, sender)
+  u in a rule means "any user": the rule breaks if it breaks for some user, e.g.
+    ok and u != sender and post("balanceOf", u) < pre("balanceOf", u)   (someone else lost balance)
+  Invariants (state facts that always hold) may use u for "every account", e.g.
+    post("debt", u) * 2 > post("collateral", u) * post("price")   (TRUE when broken)
+
+Contracts (the first is the one under test):
+### DualAssetVault
+storage: assets (array(contract(MockToken)148)2_storage), totalSupply (uint256), balanceOf (mapping(address,uint256))
+functions: depositMulti(uint256[]), withdraw(uint256)
+```solidity
+contract DualAssetVault {
+    MockToken[2] public assets;
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+
+    event Deposit(address indexed user, uint256 value, uint256 shares);
+    event Withdraw(address indexed user, uint256 shares, uint256 out0, uint256 out1);
+
+    constructor(MockToken a0, MockToken a1) {
+        assets[0] = a0;
+        assets[1] = a1;
+    }
+
+    function totalHoldings() public view returns (uint256) {
+        return assets[0].balanceOf(address(this)) + assets[1].balanceOf(address(this));
+    }
+
+    function depositMulti(uint256[] calldata amounts) external returns (uint256 shares) {
+        require(amounts.length > 0 && amounts.length <= 2, "length");
+        uint256 holdings;
+        uint256 value;
+        for (uint256 i = 0; i < amounts.length; i++) {
+            holdings += assets[i].balanceOf(address(this));
+            value += amounts[i];
+        }
+        require(value > 0, "zero");
+        shares = (totalSupply == 0 || holdings == 0) ? value : value * totalSupply / holdings;
+        require(shares > 0, "shares");
+
+        for (uint256 i = 0; i < amounts.length; i++) {
+            if (amounts[i] > 0) assets[i].transferFrom(msg.sender, address(this), amounts[i]);
+        }
+        totalSupply += shares;
+        balanceOf[msg.sender] += shares;
+        emit Deposit(msg.sender, value, shares);
+    }
+
+    function withdraw(uint256 shares) external {
+        require(shares > 0 && balanceOf[msg.sender] >= shares, "shares");
+        uint256 out0 = shares * assets[0].balanceOf(address(this)) / totalSupply;
+        uint256 out1 = shares * assets[1].balanceOf(address(this)) / totalSupply;
+        balanceOf[msg.sender] -= shares;
+        totalSupply -= shares;
+        if (out0 > 0) assets[0].transfer(msg.sender, out0);
+        if (out1 > 0) assets[1].transfer(msg.sender, out1);
+        emit Withdraw(msg.sender, shares, out0, out1);
+    }
+}
+```
+
+### MockToken
+storage: name (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+```solidity
+contract MockToken {
+    string public name;
+    uint8 public immutable decimals;
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    address public immutable minter;
+
+    constructor(string memory n, uint8 d) {
+        minter = msg.sender;
+        name = n;
+        decimals = d;
+    }
+
+    function mint(address to, uint256 amount) external {
+        require(msg.sender == minter, "minter");
+        balanceOf[to] += amount;
+        totalSupply += amount;
+    }
+
+    function approve(address s, uint256 amount) external returns (bool) {
+        allowance[msg.sender][s] = amount;
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        allowance[from][msg.sender] -= amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+}
+```
+
+### MockToken
+storage: name (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+```solidity
+contract MockToken {
+    string public name;
+    uint8 public immutable decimals;
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    address public immutable minter;
+
+    constructor(string memory n, uint8 d) {
+        minter = msg.sender;
+        name = n;
+        decimals = d;
+    }
+
+    function mint(address to, uint256 amount) external {
+        require(msg.sender == minter, "minter");
+        balanceOf[to] += amount;
+        totalSupply += amount;
+    }
+
+    function approve(address s, uint256 amount) external returns (bool) {
+        allowance[msg.sender][s] = amount;
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        allowance[from][msg.sender] -= amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+}
+```
+
+Deployment of this case (A0 is the contract under test):
+  A0 = DualAssetVault
+  A1 = MockToken_A  (an instance of MockToken; write its storage as "MockToken_A.var")
+  A2 = MockToken_B  (an instance of MockToken; write its storage as "MockToken_B.var")
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    MockToken(A1).mint(U0, 100e18);
+    MockToken(A2).mint(U0, 100e18);
+    vm.prank(U0); MockToken(A1).approve(A0, type(uint256).max);
+    vm.prank(U0); MockToken(A2).approve(A0, type(uint256).max);
+    { uint256[] memory amts = new uint256[](2); amts[0] = 100e18; amts[1] = 100e18; vm.prank(U0); DualAssetVault(A0).depositMulti(amts); }
+    MockToken(A1).mint(U1, 100e18);
+    MockToken(A2).mint(U1, 100e18);
+    vm.prank(U1); MockToken(A1).approve(A0, type(uint256).max);
+    vm.prank(U1); MockToken(A2).approve(A0, type(uint256).max);

@@ -1,0 +1,33 @@
+{
+ "drop": [
+  {
+   "name": "withdraw_fair",
+   "why": "duplicate of withdraw_fair_custom, and its 'assets' param is the bare mapping MockToken.balanceOf with no key (A0), so its meaning is ambiguous"
+  }
+ ],
+ "fix": [
+  {
+   "name": "deposit_pull_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"deposit\") and wide(post(\"MockToken.balanceOf\", A0) - pre(\"MockToken.balanceOf\", A0)) * 1000000000000 + 999999999999 < wide(arg(0))",
+   "why": "pulled tokens match amount18 up to scale rounding; rewritten so small amount18 does not underflow arg(0) - 999999999999"
+  },
+  {
+   "name": "no_third_party_token_loss",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and u != A0 and not called(\"MockToken.transferFrom\") and post(\"MockToken.balanceOf\", u) < pre(\"MockToken.balanceOf\", u)",
+   "why": "no token loss for others; direct MockToken.transferFrom by an approved spender is legitimate and excluded"
+  }
+ ],
+ "add": [
+  {
+   "name": "withdraw_pays_sender",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and sender != A0 and post(\"MockToken.balanceOf\", sender) - pre(\"MockToken.balanceOf\", sender) != pre(\"MockToken.balanceOf\", A0) - post(\"MockToken.balanceOf\", A0)",
+   "why": "what leaves the pool on withdraw goes to the caller"
+  }
+ ]
+}

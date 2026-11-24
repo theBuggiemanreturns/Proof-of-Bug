@@ -1,0 +1,112 @@
+{
+ "rules": [
+  {
+   "name": "breaker",
+   "family": "breaker_hold",
+   "params": {
+    "flag": "paused",
+    "danger": "post(\"reserves\") < 10"
+   },
+   "expr": "",
+   "why": "can't reset while drained"
+  },
+  {
+   "name": "auth_unpause",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and sender != pre(\"guardian\") and pre(\"paused\") != 0 and post(\"paused\") == 0",
+   "why": "only the guardian unpauses"
+  },
+  {
+   "name": "guardian_fixed",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and post(\"guardian\") != pre(\"guardian\")",
+   "why": "nobody changes the guardian"
+  },
+  {
+   "name": "dep_exact",
+   "family": "exact_effect",
+   "params": {
+    "fn": "deposit",
+    "value": "post(\"reserves\")",
+    "before": "pre(\"reserves\")",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "deposit adds exactly"
+  },
+  {
+   "name": "wd_exact",
+   "family": "exact_decrease",
+   "params": {
+    "fn": "withdraw",
+    "value": "post(\"reserves\")",
+    "before": "pre(\"reserves\")",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "withdraw removes exactly"
+  },
+  {
+   "name": "trips",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"withdraw\") and ok and post(\"reserves\") < 10 and post(\"paused\") == 0",
+   "why": "the breaker trips when drained"
+  },
+  {
+   "name": "no_trip_early",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"withdraw\") and ok and post(\"reserves\") >= 10 and pre(\"paused\") == 0 and post(\"paused\") != 0",
+   "why": "the breaker doesn't trip for nothing"
+  },
+  {
+   "name": "paused_blocks",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"withdraw\") and ok and pre(\"paused\") != 0",
+   "why": "no withdrawals while paused"
+  },
+  {
+   "name": "dep_no_pause",
+   "family": "no_side_effect",
+   "params": {
+    "fn": "deposit",
+    "value": "post(\"paused\")",
+    "before": "pre(\"paused\")"
+   },
+   "expr": "",
+   "why": "deposits don't touch the breaker"
+  },
+  {
+   "name": "wd_works",
+   "family": "must_succeed",
+   "params": {
+    "fn": "withdraw",
+    "condition": "pre(\"paused\") == 0 and arg(0) <= pre(\"reserves\")"
+   },
+   "expr": "",
+   "why": "withdrawals work while open"
+  },
+  {
+   "name": "unpause_works",
+   "family": "must_succeed",
+   "params": {
+    "fn": "unpause",
+    "condition": "sender == pre(\"guardian\") and pre(\"reserves\") >= 10"
+   },
+   "expr": "",
+   "why": "the guardian can reopen a healthy pool"
+  },
+  {
+   "name": "unpause_effect",
+   "family": "custom",
+   "params": {},
+   "expr": "called(\"unpause\") and ok and post(\"paused\") != 0",
+   "why": "unpausing actually unpauses"
+  }
+ ],
+ "invariants": []
+}

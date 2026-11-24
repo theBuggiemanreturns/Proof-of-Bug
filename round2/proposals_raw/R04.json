@@ -1,0 +1,239 @@
+{
+ "rules": [
+  {
+   "name": "credit_only_admin",
+   "family": "never_when",
+   "params": {
+    "fn": "credit",
+    "forbidden": "sender != pre(\"admin\")"
+   },
+   "expr": "",
+   "why": "only admin credits"
+  },
+  {
+   "name": "grant_only_admin",
+   "family": "never_when",
+   "params": {
+    "fn": "grantVesting",
+    "forbidden": "sender != pre(\"admin\")"
+   },
+   "expr": "",
+   "why": "only admin grants"
+  },
+  {
+   "name": "supply_only_admin",
+   "family": "authorized_increase",
+   "params": {
+    "amount": "totalSupply",
+    "admin": "pre(\"admin\")"
+   },
+   "expr": "",
+   "why": "supply only grows by admin"
+  },
+  {
+   "name": "admin_fixed",
+   "family": "authorized_change",
+   "params": {
+    "value": "post(\"admin\")",
+    "before": "pre(\"admin\")",
+    "admin": "pre(\"admin\")"
+   },
+   "expr": "",
+   "why": "admin cannot be changed by others"
+  },
+  {
+   "name": "delegated_ledger",
+   "family": "ledger",
+   "params": {
+    "accounts": "delegated",
+    "total": "totalDelegated"
+   },
+   "expr": "",
+   "why": "per-account delegations sum to total"
+  },
+  {
+   "name": "no_third_party_balance_loss",
+   "family": "no_third_party_loss",
+   "params": {
+    "balance": "balanceOf"
+   },
+   "expr": "",
+   "why": "no one loses spendable balance in others' calls"
+  },
+  {
+   "name": "no_third_party_locked_loss",
+   "family": "no_third_party_loss",
+   "params": {
+    "balance": "locked"
+   },
+   "expr": "",
+   "why": "no one loses vesting in others' calls"
+  },
+  {
+   "name": "no_third_party_delegated_loss",
+   "family": "no_third_party_loss",
+   "params": {
+    "balance": "delegated"
+   },
+   "expr": "",
+   "why": "no one loses delegation in others' calls"
+  },
+  {
+   "name": "delegate_zero",
+   "family": "never_when",
+   "params": {
+    "fn": "delegate",
+    "forbidden": "arg(0) == 0"
+   },
+   "expr": "",
+   "why": "zero delegation rejected"
+  },
+  {
+   "name": "delegate_over_balance",
+   "family": "never_when",
+   "params": {
+    "fn": "delegate",
+    "forbidden": "arg(0) > pre(\"balanceOf\", sender)"
+   },
+   "expr": "",
+   "why": "cannot delegate more than spendable balance (balance is debited)"
+  },
+  {
+   "name": "undelegate_bound",
+   "family": "never_when",
+   "params": {
+    "fn": "undelegate",
+    "forbidden": "arg(0) == 0 or arg(0) > pre(\"delegated\", sender)"
+   },
+   "expr": "",
+   "why": "cannot undelegate more than delegated"
+  },
+  {
+   "name": "transfer_over_balance",
+   "family": "never_when",
+   "params": {
+    "fn": "transfer",
+    "forbidden": "arg(1) > pre(\"balanceOf\", sender) or arg(0) == 0"
+   },
+   "expr": "",
+   "why": "cannot spend more than balance"
+  },
+  {
+   "name": "delegate_debits",
+   "family": "exact_decrease",
+   "params": {
+    "fn": "delegate",
+    "value": "post(\"balanceOf\", sender)",
+    "before": "pre(\"balanceOf\", sender)",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "delegation debits spendable"
+  },
+  {
+   "name": "delegate_credits",
+   "family": "exact_effect",
+   "params": {
+    "fn": "delegate",
+    "value": "post(\"delegated\", sender)",
+    "before": "pre(\"delegated\", sender)",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "delegation recorded exactly"
+  },
+  {
+   "name": "undelegate_credits",
+   "family": "exact_effect",
+   "params": {
+    "fn": "undelegate",
+    "value": "post(\"balanceOf\", sender)",
+    "before": "pre(\"balanceOf\", sender)",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "undelegation returns balance"
+  },
+  {
+   "name": "credit_exact",
+   "family": "exact_effect",
+   "params": {
+    "fn": "credit",
+    "value": "post(\"totalSupply\")",
+    "before": "pre(\"totalSupply\")",
+    "delta": "arg(1)"
+   },
+   "expr": "",
+   "why": "credit grows supply by amount"
+  },
+  {
+   "name": "grant_exact",
+   "family": "exact_effect",
+   "params": {
+    "fn": "grantVesting",
+    "value": "post(\"locked\", arg(0))",
+    "before": "pre(\"locked\", arg(0))",
+    "delta": "arg(1)"
+   },
+   "expr": "",
+   "why": "grant locks amount"
+  },
+  {
+   "name": "conservation",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and not called(\"credit\") and not called(\"grantVesting\") and post_sum(\"balanceOf\") + post(\"totalDelegated\") != pre_sum(\"balanceOf\") + pre(\"totalDelegated\")",
+   "why": "non-admin calls only move value between balance and delegation"
+  },
+  {
+   "name": "locked_only_grant",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and not called(\"grantVesting\") and post_sum(\"locked\") != pre_sum(\"locked\")",
+   "why": "locked changes only via grantVesting"
+  },
+  {
+   "name": "transfer_conserves",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"transfer\") and post_sum(\"balanceOf\") != pre_sum(\"balanceOf\")",
+   "why": "transfer conserves balances"
+  },
+  {
+   "name": "supply_only_mint",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and post(\"totalSupply\") != pre(\"totalSupply\") and not called(\"credit\") and not called(\"grantVesting\")",
+   "why": "supply changes only by admin mints"
+  },
+  {
+   "name": "balance_bounded",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and post(\"balanceOf\", u) > post(\"totalSupply\")",
+   "why": "no balance from nothing"
+  }
+ ],
+ "invariants": [
+  {
+   "name": "supply_conservation",
+   "expr": "post_sum(\"balanceOf\") + post_sum(\"locked\") + post(\"totalDelegated\") != post(\"totalSupply\")",
+   "why": "all value accounted for"
+  },
+  {
+   "name": "balance_le_supply",
+   "expr": "post(\"balanceOf\", u) > post(\"totalSupply\")",
+   "why": "no balance exceeds supply"
+  },
+  {
+   "name": "delegated_le_supply",
+   "expr": "post(\"totalDelegated\") > post(\"totalSupply\")",
+   "why": "delegation backed by supply"
+  },
+  {
+   "name": "delegated_eq_sum",
+   "expr": "post(\"totalDelegated\") != post_sum(\"delegated\")",
+   "why": "total delegated equals sum"
+  }
+ ]
+}

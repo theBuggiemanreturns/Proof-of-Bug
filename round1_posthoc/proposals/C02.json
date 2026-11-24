@@ -1,0 +1,331 @@
+{
+ "rules": [
+  {
+   "name": "stake_ledger",
+   "family": "ledger",
+   "params": {
+    "accounts": "balanceOf",
+    "total": "totalSupply"
+   },
+   "expr": "",
+   "why": "stakes sum to totalSupply"
+  },
+  {
+   "name": "stake_backed",
+   "family": "bounded_by",
+   "params": {
+    "amount": "post(\"totalSupply\")",
+    "backing": "post(\"TokenC02_STK.balanceOf\", A0)"
+   },
+   "expr": "",
+   "why": "staked total backed by staking tokens held"
+  },
+  {
+   "name": "stake_sync",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"stake\") or called(\"withdraw\") or called(\"exit\") or called(\"getReward\")) and post(\"totalSupply\") + pre(\"TokenC02_STK.balanceOf\", A0) != pre(\"totalSupply\") + post(\"TokenC02_STK.balanceOf\", A0)",
+   "why": "totalSupply and staking-token holdings move together"
+  },
+  {
+   "name": "rewards_backed",
+   "family": "bounded_by",
+   "params": {
+    "amount": "post_sum(\"rewards\")",
+    "backing": "post(\"TokenC02_RWD.balanceOf\", A0)"
+   },
+   "expr": "",
+   "why": "owed rewards backed by reward tokens"
+  },
+  {
+   "name": "rpt_monotone",
+   "family": "monotone",
+   "params": {
+    "value": "post(\"rewardPerTokenStored\")"
+   },
+   "expr": "",
+   "why": "reward index only rises"
+  },
+  {
+   "name": "lut_monotone",
+   "family": "monotone",
+   "params": {
+    "value": "post(\"lastUpdateTime\")"
+   },
+   "expr": "",
+   "why": "lastUpdateTime only rises"
+  },
+  {
+   "name": "paid_index_monotone",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and post(\"userRewardPerTokenPaid\", u) < pre(\"userRewardPerTokenPaid\", u)",
+   "why": "user checkpoints only rise"
+  },
+  {
+   "name": "accrual",
+   "family": "accrual_bounded",
+   "params": {
+    "paid": "post_sum(\"rewards\")",
+    "rate": "post(\"rewardRate\")",
+    "start": "post(\"periodFinish\") - post(\"rewardsDuration\")"
+   },
+   "expr": "",
+   "why": "rewards accrued <= rate*elapsed"
+  },
+  {
+   "name": "accrual_custom",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and post(\"periodFinish\") >= post(\"rewardsDuration\") and wide(post_sum(\"rewards\")) > wide(post(\"rewardRate\")) * (now - (post(\"periodFinish\") - post(\"rewardsDuration\")))",
+   "why": "stored rewards never exceed rate times time elapsed"
+  },
+  {
+   "name": "stake_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"stake\") and (post(\"totalSupply\") != pre(\"totalSupply\") + arg(0) or post(\"balanceOf\", sender) != pre(\"balanceOf\", sender) + arg(0) or post(\"TokenC02_STK.balanceOf\", A0) != pre(\"TokenC02_STK.balanceOf\", A0) + arg(0) or post(\"TokenC02_STK.balanceOf\", sender) + arg(0) != pre(\"TokenC02_STK.balanceOf\", sender))",
+   "why": "stake moves exactly amount"
+  },
+  {
+   "name": "withdraw_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and (post(\"totalSupply\") + arg(0) != pre(\"totalSupply\") or post(\"balanceOf\", sender) + arg(0) != pre(\"balanceOf\", sender) or post(\"TokenC02_STK.balanceOf\", A0) + arg(0) != pre(\"TokenC02_STK.balanceOf\", A0) or post(\"TokenC02_STK.balanceOf\", sender) != pre(\"TokenC02_STK.balanceOf\", sender) + arg(0))",
+   "why": "withdraw returns exactly amount"
+  },
+  {
+   "name": "exit_clears",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"exit\") and (post(\"balanceOf\", sender) != 0 or post(\"rewards\", sender) != 0)",
+   "why": "exit withdraws all and claims"
+  },
+  {
+   "name": "exit_returns_stake",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"exit\") and post(\"TokenC02_STK.balanceOf\", sender) != pre(\"TokenC02_STK.balanceOf\", sender) + pre(\"balanceOf\", sender)",
+   "why": "exit returns full stake"
+  },
+  {
+   "name": "getreward_clears",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"getReward\") and post(\"rewards\", sender) != 0",
+   "why": "claim zeroes rewards"
+  },
+  {
+   "name": "getreward_pays_owed",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"getReward\") or called(\"exit\")) and post(\"TokenC02_RWD.balanceOf\", sender) < pre(\"TokenC02_RWD.balanceOf\", sender) + pre(\"rewards\", sender)",
+   "why": "claim pays at least stored rewards"
+  },
+  {
+   "name": "getreward_no_stake_change",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"getReward\") and (post(\"balanceOf\", u) != pre(\"balanceOf\", u) or post(\"totalSupply\") != pre(\"totalSupply\"))",
+   "why": "claiming does not touch stakes"
+  },
+  {
+   "name": "stake_withdraw_keep_rewards",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"stake\") or called(\"withdraw\")) and post(\"rewards\", sender) < pre(\"rewards\", sender)",
+   "why": "stake/withdraw never forfeit rewards"
+  },
+  {
+   "name": "stake_withdraw_no_rwd_move",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"stake\") or called(\"withdraw\")) and post(\"TokenC02_RWD.balanceOf\", A0) != pre(\"TokenC02_RWD.balanceOf\", A0)",
+   "why": "stake/withdraw pay no rewards"
+  },
+  {
+   "name": "stake_third_party",
+   "family": "no_third_party_loss",
+   "params": {
+    "balance": "balanceOf"
+   },
+   "expr": "",
+   "why": "nobody loses stake in others' calls"
+  },
+  {
+   "name": "rewards_third_party",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and post(\"rewards\", u) < pre(\"rewards\", u)",
+   "why": "others' rewards never reduced"
+  },
+  {
+   "name": "stk_third_party",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"stake\") or called(\"withdraw\") or called(\"exit\") or called(\"getReward\")) and u != sender and u != A0 and post(\"TokenC02_STK.balanceOf\", u) < pre(\"TokenC02_STK.balanceOf\", u)",
+   "why": "staking calls never take others' tokens"
+  },
+  {
+   "name": "rwd_out_only_to_claimer",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"stake\") or called(\"withdraw\") or called(\"exit\") or called(\"getReward\")) and u != sender and u != A0 and post(\"TokenC02_RWD.balanceOf\", u) != pre(\"TokenC02_RWD.balanceOf\", u)",
+   "why": "rewards only paid to the caller"
+  },
+  {
+   "name": "rate_auth",
+   "family": "authorized_change",
+   "params": {
+    "value": "post(\"rewardRate\")",
+    "before": "pre(\"rewardRate\")",
+    "admin": "pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "only owner sets rate"
+  },
+  {
+   "name": "finish_auth",
+   "family": "authorized_change",
+   "params": {
+    "value": "post(\"periodFinish\")",
+    "before": "pre(\"periodFinish\")",
+    "admin": "pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "only owner sets periodFinish"
+  },
+  {
+   "name": "duration_auth",
+   "family": "authorized_change",
+   "params": {
+    "value": "post(\"rewardsDuration\")",
+    "before": "pre(\"rewardsDuration\")",
+    "admin": "pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "only owner sets duration"
+  },
+  {
+   "name": "owner_auth",
+   "family": "authorized_change",
+   "params": {
+    "value": "post(\"owner\")",
+    "before": "pre(\"owner\")",
+    "admin": "pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "owner fixed"
+  },
+  {
+   "name": "notify_owner",
+   "family": "never_when",
+   "params": {
+    "fn": "notifyRewardAmount",
+    "forbidden": "sender != pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "only owner notifies"
+  },
+  {
+   "name": "setdur_owner",
+   "family": "never_when",
+   "params": {
+    "fn": "setRewardsDuration",
+    "forbidden": "sender != pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "only owner"
+  },
+  {
+   "name": "setdur_active",
+   "family": "never_when",
+   "params": {
+    "fn": "setRewardsDuration",
+    "forbidden": "now <= pre(\"periodFinish\") or arg(0) == 0"
+   },
+   "expr": "",
+   "why": "duration fixed during period"
+  },
+  {
+   "name": "recover_owner",
+   "family": "never_when",
+   "params": {
+    "fn": "recoverERC20",
+    "forbidden": "sender != pre(\"owner\") or arg(0) == A1 or arg(0) == A2"
+   },
+   "expr": "",
+   "why": "only owner, not staking/reward token"
+  },
+  {
+   "name": "recover_no_core_tokens",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"recoverERC20\") and (post(\"TokenC02_STK.balanceOf\", A0) != pre(\"TokenC02_STK.balanceOf\", A0) or post(\"TokenC02_RWD.balanceOf\", A0) != pre(\"TokenC02_RWD.balanceOf\", A0))",
+   "why": "recover never moves staking or reward tokens"
+  },
+  {
+   "name": "withdraw_works",
+   "family": "exit_amount",
+   "params": {
+    "fn": "withdraw",
+    "amount_arg": "0",
+    "balance": "balanceOf"
+   },
+   "expr": "",
+   "why": "staker can always withdraw"
+  },
+  {
+   "name": "exit_works",
+   "family": "exit_all",
+   "params": {
+    "fn": "exit",
+    "balance": "balanceOf"
+   },
+   "expr": "",
+   "why": "staker can always exit"
+  },
+  {
+   "name": "stake_works",
+   "family": "must_succeed",
+   "params": {
+    "fn": "stake",
+    "condition": "arg(0) > 0 and arg(0) <= pre(\"TokenC02_STK.balanceOf\", sender) and arg(0) <= pre(\"TokenC02_STK.allowance\", sender, A0) and pre(\"entered\") == 0"
+   },
+   "expr": "",
+   "why": "funded stake works"
+  }
+ ],
+ "invariants": [
+  {
+   "name": "ledger",
+   "expr": "post_sum(\"balanceOf\") != post(\"totalSupply\")",
+   "why": "stakes sum"
+  },
+  {
+   "name": "stake_backed",
+   "expr": "post(\"totalSupply\") > post(\"TokenC02_STK.balanceOf\", A0)",
+   "why": "stake backed"
+  },
+  {
+   "name": "rewards_backed",
+   "expr": "post_sum(\"rewards\") > post(\"TokenC02_RWD.balanceOf\", A0)",
+   "why": "rewards backed"
+  },
+  {
+   "name": "checkpoint_le_index",
+   "expr": "post(\"userRewardPerTokenPaid\", u) > post(\"rewardPerTokenStored\")",
+   "why": "user checkpoint <= global index"
+  },
+  {
+   "name": "lut_le_finish",
+   "expr": "post(\"lastUpdateTime\") > post(\"periodFinish\")",
+   "why": "lastUpdateTime <= periodFinish"
+  },
+  {
+   "name": "not_entered",
+   "expr": "post(\"entered\") != 0",
+   "why": "lock released after every tx"
+  }
+ ]
+}

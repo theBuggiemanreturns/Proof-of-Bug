@@ -1,0 +1,439 @@
+BATCH 1 of 3: cases R01, R02, R03, R04. Reply with one JSON object keyed by these case ids (see your instructions).
+
+===== CASE R01 =====
+Contracts (the first is the one under test):
+### VestingPool
+storage: totalShares (uint256), nextLockId (uint256), locks (mapping(uint256,struct(Lock)163_storage))
+functions: cancel(uint256), createLock(address,uint256,uint64), release(uint256)
+```solidity
+contract VestingPool {
+    struct Lock {
+        address creator;
+        address beneficiary;
+        uint256 sharesDeposited;
+        uint256 sharesWithdrawn;
+        uint256 shares;
+        uint64 start;
+        uint64 end;
+    }
+
+    MockToken public immutable token;
+    uint256 public totalShares;
+    uint256 public nextLockId;
+    mapping(uint256 => Lock) public locks;
+
+    event LockCreated(uint256 indexed id, address indexed creator, address indexed beneficiary, uint256 amount, uint256 shares);
+    event Released(uint256 indexed id, uint256 shares, uint256 amount);
+    event Cancelled(uint256 indexed id, uint256 toCreator, uint256 toBeneficiary);
+
+    constructor(MockToken _token) {
+        token = _token;
+    }
+
+    function createLock(address beneficiary, uint256 amount, uint64 duration) external returns (uint256 id) {
+        require(amount > 0 && duration > 0, "params");
+        require(beneficiary != address(0), "beneficiary");
+        uint256 balanceBefore = token.balanceOf(address(this));
+        token.transferFrom(msg.sender, address(this), amount);
+        uint256 shares = (totalShares == 0 || balanceBefore == 0) ? amount : amount * totalShares / balanceBefore;
+        require(shares > 0, "shares");
+
+        id = nextLockId++;
+        locks[id] = Lock({
+            creator: msg.sender,
+            beneficiary: beneficiary,
+            sharesDeposited: shares,
+            sharesWithdrawn: 0,
+            shares: shares,
+            start: uint64(block.timestamp),
+            end: uint64(block.timestamp) + duration
+        });
+        totalShares += shares;
+        emit LockCreated(id, msg.sender, beneficiary, amount, shares);
+    }
+
+    function vestedShares(uint256 id) public view returns (uint256) {
+        Lock storage l = locks[id];
+        if (block.timestamp >= l.end) return l.sharesDeposited;
+        if (block.timestamp <= l.start) return 0;
+        return l.sharesDeposited * (block.timestamp - l.start) / (l.end - l.start);
+    }
+
+    function sharesToTokens(uint256 shares) public view returns (uint256) {
+        if (totalShares == 0) return 0;
+        return shares * token.balanceOf(address(this)) / totalShares;
+    }
+
+    function release(uint256 id) external {
+        Lock storage l = locks[id];
+        require(msg.sender == l.beneficiary, "not beneficiary");
+        uint256 available = vestedShares(id) - l.sharesWithdrawn;
+        require(available > 0, "nothing vested");
+        uint256 amount = sharesToTokens(available);
+        l.sharesWithdrawn += available;
+        totalShares -= available;
+        token.transfer(l.beneficiary, amount);
+        emit Released(id, available, amount);
+    }
+
+    function cancel(uint256 id) external {
+        Lock storage l = locks[id];
+        require(msg.sender == l.creator, "not creator");
+        require(l.shares > 0, "closed");
+        uint256 vestedUnclaimed = vestedShares(id) - l.sharesWithdrawn;
+        uint256 unvested = l.shares - vestedUnclaimed;
+
+        uint256 toCreator = sharesToTokens(unvested);
+        uint256 toBeneficiary = sharesToTokens(vestedUnclaimed);
+        totalShares -= l.shares;
+        l.sharesWithdrawn = l.sharesDeposited;
+        l.shares = 0;
+
+        if (toCreator > 0) token.transfer(l.creator, toCreator);
+        if (toBeneficiary > 0) token.transfer(l.beneficiary, toBeneficiary);
+        emit Cancelled(id, toCreator, toBeneficiary);
+    }
+}
+```
+
+### MockToken
+storage: name (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+```solidity
+contract MockToken {
+    string public name;
+    uint8 public immutable decimals;
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    address public immutable minter;
+
+    constructor(string memory n, uint8 d) {
+        minter = msg.sender;
+        name = n;
+        decimals = d;
+    }
+
+    function mint(address to, uint256 amount) external {
+        require(msg.sender == minter, "minter");
+        balanceOf[to] += amount;
+        totalSupply += amount;
+    }
+
+    function approve(address s, uint256 amount) external returns (bool) {
+        allowance[msg.sender][s] = amount;
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        allowance[from][msg.sender] -= amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+}
+```
+
+Deployment of this case (A0 is the contract under test):
+  A0 = VestingPool
+  A1 = MockToken
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    MockToken(A1).mint(U0, 100e18);
+    vm.prank(U0); MockToken(A1).approve(A0, 100e18);
+    MockToken(A1).mint(U1, 100e18);
+    vm.prank(U1); MockToken(A1).approve(A0, 100e18);
+    vm.prank(U0); VestingPool(A0).createLock(U0, 100e18, 100);
+
+===== CASE R02 =====
+Contracts (the first is the one under test):
+### TimeLockedSavings
+storage: nextId (uint256), totalLocked (uint256), deposits (mapping(uint256,struct(Deposit)8_storage))
+functions: deposit(uint64), extend(uint256,uint64), moveOwnership(uint256,address), topUp(uint256), withdraw(uint256)
+```solidity
+contract TimeLockedSavings {
+    struct Deposit {
+        address owner;
+        uint256 amount;
+        uint64 unlockAt;
+    }
+
+    uint64 public constant MIN_DELAY = 1 days;
+    uint64 public constant MAX_DELAY = 365 days;
+
+    uint256 public nextId;
+    uint256 public totalLocked;
+    mapping(uint256 => Deposit) public deposits;
+
+    event Deposited(uint256 indexed id, address indexed owner, uint256 amount, uint64 unlockAt);
+    event Extended(uint256 indexed id, uint64 unlockAt);
+    event OwnershipMoved(uint256 indexed id, address indexed from, address indexed to);
+    event Withdrawn(uint256 indexed id, address indexed to, uint256 amount);
+
+    function deposit(uint64 delay) external payable returns (uint256 id) {
+        require(msg.value > 0, "value");
+        require(delay >= MIN_DELAY && delay <= MAX_DELAY, "delay");
+        id = nextId++;
+        uint64 unlockAt = uint64(block.timestamp) + delay;
+        deposits[id] = Deposit({owner: msg.sender, amount: msg.value, unlockAt: unlockAt});
+        totalLocked += msg.value;
+        emit Deposited(id, msg.sender, msg.value, unlockAt);
+    }
+
+    function topUp(uint256 id) external payable {
+        Deposit storage d = deposits[id];
+        require(d.owner == msg.sender, "owner");
+        require(d.amount > 0, "closed");
+        require(msg.value > 0, "value");
+        d.amount += msg.value;
+        totalLocked += msg.value;
+    }
+
+    function extend(uint256 id, uint64 newUnlockAt) external {
+        Deposit storage d = deposits[id];
+        require(d.owner == msg.sender, "owner");
+        require(newUnlockAt > d.unlockAt, "earlier");
+        require(newUnlockAt <= uint64(block.timestamp) + MAX_DELAY, "too far");
+        d.unlockAt = newUnlockAt;
+        emit Extended(id, newUnlockAt);
+    }
+
+    function moveOwnership(uint256 id, address to) external {
+        Deposit storage d = deposits[id];
+        require(d.owner == msg.sender, "owner");
+        require(to != address(0), "zero");
+        d.owner = to;
+        emit OwnershipMoved(id, msg.sender, to);
+    }
+
+    function withdraw(uint256 id) external {
+        Deposit storage d = deposits[id];
+        require(d.owner == msg.sender, "owner");
+        require(block.timestamp >= d.unlockAt, "locked");
+        uint256 amount = d.amount;
+        require(amount > 0, "empty");
+        d.amount = 0;
+        totalLocked -= amount;
+        (bool ok, ) = msg.sender.call{value: amount}("");
+        require(ok, "send");
+        emit Withdrawn(id, msg.sender, amount);
+    }
+}
+```
+
+Deployment of this case (A0 is the contract under test):
+  A0 = TimeLockedSavings
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  U1 is a contract: when the contract under test calls it (e.g. sends it ETH) it may call back into the contract once per transaction, with any function and arguments.
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    vm.deal(U0, 5 ether);
+    vm.prank(U0); TimeLockedSavings(A0).deposit{value: 5 ether}(7 days);
+    vm.deal(U1, 5 ether);
+
+===== CASE R03 =====
+Contracts (the first is the one under test):
+### LiquidityVault
+storage: owner (address), totalLiquidity (uint256), liquidityOf (mapping(address,uint256))
+functions: addIncentives(uint256), deposit(uint256), withdraw(uint256)
+```solidity
+contract LiquidityVault {
+    MockToken public immutable asset;
+    address public owner;
+    uint256 public totalLiquidity;
+    mapping(address => uint256) public liquidityOf;
+
+    event Deposited(address indexed user, uint256 amount, uint256 liquidity);
+    event Withdrawn(address indexed user, uint256 liquidity, uint256 amount);
+    event IncentivesAdded(uint256 amount);
+
+    constructor(MockToken _asset) {
+        asset = _asset;
+        owner = msg.sender;
+    }
+
+    function addIncentives(uint256 amount) external {
+        require(msg.sender == owner, "owner");
+        asset.transferFrom(msg.sender, address(this), amount);
+        emit IncentivesAdded(amount);
+    }
+
+    function deposit(uint256 amount) external returns (uint256 liquidity) {
+        require(amount > 0, "zero");
+        uint256 bal = asset.balanceOf(address(this));
+        liquidity = (totalLiquidity == 0 || bal == 0) ? amount : amount * totalLiquidity / bal;
+        require(liquidity > 0, "liquidity");
+        asset.transferFrom(msg.sender, address(this), amount);
+        totalLiquidity += liquidity;
+        liquidityOf[msg.sender] += liquidity;
+        emit Deposited(msg.sender, amount, liquidity);
+    }
+
+    function withdraw(uint256 liquidity) external returns (uint256 amount) {
+        amount = _withdraw(msg.sender, liquidity);
+    }
+
+    function _withdraw(address user, uint256 liquidity) internal returns (uint256 amount) {
+        require(liquidityOf[user] >= liquidity, "balance");
+        uint256 bal = asset.balanceOf(address(this));
+        if (totalLiquidity == 0) {
+            amount = bal;
+        } else {
+            amount = liquidity * bal / totalLiquidity;
+        }
+        liquidityOf[user] -= liquidity;
+        totalLiquidity -= liquidity;
+        if (amount > 0) asset.transfer(user, amount);
+        emit Withdrawn(user, liquidity, amount);
+    }
+}
+```
+
+### MockToken
+storage: name (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+```solidity
+contract MockToken {
+    string public name;
+    uint8 public immutable decimals;
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    address public immutable minter;
+
+    constructor(string memory n, uint8 d) {
+        minter = msg.sender;
+        name = n;
+        decimals = d;
+    }
+
+    function mint(address to, uint256 amount) external {
+        require(msg.sender == minter, "minter");
+        balanceOf[to] += amount;
+        totalSupply += amount;
+    }
+
+    function approve(address s, uint256 amount) external returns (bool) {
+        allowance[msg.sender][s] = amount;
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        allowance[from][msg.sender] -= amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+}
+```
+
+Deployment of this case (A0 is the contract under test):
+  A0 = LiquidityVault
+  A1 = MockToken
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    MockToken(A1).mint(address(this), 500e18);
+    MockToken(A1).approve(A0, type(uint256).max);
+    LiquidityVault(A0).addIncentives(500e18);
+    MockToken(A1).mint(U0, 1_000e18);
+    vm.prank(U0); MockToken(A1).approve(A0, type(uint256).max);
+    MockToken(A1).mint(U1, 1_000e18);
+    vm.prank(U1); MockToken(A1).approve(A0, type(uint256).max);
+
+===== CASE R04 =====
+Contracts (the first is the one under test):
+### StakeLedger
+storage: admin (address), totalSupply (uint256), totalDelegated (uint256), balanceOf (mapping(address,uint256)), locked (mapping(address,uint256)), delegated (mapping(address,uint256))
+functions: credit(address,uint256), delegate(uint256), grantVesting(address,uint256), transfer(address,uint256), undelegate(uint256)
+```solidity
+contract StakeLedger {
+    address public admin;
+    uint256 public totalSupply;
+    uint256 public totalDelegated;
+
+    mapping(address => uint256) public balanceOf;   // spendable
+    mapping(address => uint256) public locked;      // vesting, not spendable
+    mapping(address => uint256) public delegated;
+
+    event Transfer(address indexed from, address indexed to, uint256 amount);
+    event Delegated(address indexed account, uint256 amount);
+    event Undelegated(address indexed account, uint256 amount);
+
+    constructor() {
+        admin = msg.sender;
+    }
+
+    modifier onlyAdmin() {
+        require(msg.sender == admin, "admin");
+        _;
+    }
+
+    function credit(address to, uint256 amount) external onlyAdmin {
+        balanceOf[to] += amount;
+        totalSupply += amount;
+        emit Transfer(address(0), to, amount);
+    }
+
+    function grantVesting(address to, uint256 amount) external onlyAdmin {
+        locked[to] += amount;
+        totalSupply += amount;
+    }
+
+    function delegate(uint256 amount) external {
+        require(amount > 0, "zero");
+        require(amount <= balanceOf[msg.sender] + locked[msg.sender] - delegated[msg.sender], "insufficient");
+        delegated[msg.sender] += amount;
+        totalDelegated += amount;
+        unchecked {
+            balanceOf[msg.sender] -= amount;
+        }
+        emit Delegated(msg.sender, amount);
+    }
+
+    function undelegate(uint256 amount) external {
+        require(amount > 0 && amount <= delegated[msg.sender], "amount");
+        delegated[msg.sender] -= amount;
+        totalDelegated -= amount;
+        unchecked {
+            balanceOf[msg.sender] += amount;
+        }
+        emit Undelegated(msg.sender, amount);
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        require(to != address(0), "to");
+        require(balanceOf[msg.sender] >= amount, "balance");
+        unchecked {
+            balanceOf[msg.sender] -= amount;
+            balanceOf[to] += amount;
+        }
+        emit Transfer(msg.sender, to, amount);
+        return true;
+    }
+}
+```
+
+Deployment of this case (A0 is the contract under test):
+  A0 = StakeLedger
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    StakeLedger(A0).credit(U0, 100e18);
+    StakeLedger(A0).grantVesting(U1, 20e18);
+

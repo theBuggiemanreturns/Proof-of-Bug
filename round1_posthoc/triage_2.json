@@ -1,0 +1,11 @@
+{
+ "triage": [
+  {
+   "case": "C06",
+   "n": 11,
+   "rule": "exit_amount",
+   "verdict": "real_bug",
+   "why": "_transfer caches fromBalance and toBalance before writing, so a self-transfer (from == to) doubles the sender's shares (3 -> 6) without changing totalSupply, and the redeem of the inflated balance then reverts; the root cause is shares minted from nothing, which also breaks the share ledger."
+  }
+ ]
+}

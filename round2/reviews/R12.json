@@ -1,0 +1,40 @@
+{
+ "drop": [
+  {
+   "name": "stake_token_sync",
+   "why": "over-claims: anyone can send stake tokens straight to A0 with MockToken_STK.transfer, changing the held balance without a booked stake; correct behaviour trips it. staked_backed covers the real property"
+  }
+ ],
+ "fix": [
+  {
+   "name": "harvest_bounded",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and not called(\"notifyReward\") and not called(\"MockToken_RWD.transferFrom\") and not called(\"MockToken_RWD.transfer\") and wide(post(\"MockToken_RWD.balanceOf\", sender) - pre(\"MockToken_RWD.balanceOf\", sender)) > wide(pre(\"userInfo\", sender, \"amount\")) * wide(pre(\"accRewardPerShare\")) // 1000000000000 - pre(\"userInfo\", sender, \"rewardDebt\")",
+   "why": "a pool call pays at most the caller's pending reward; direct reward-token transfers/transferFrom to the caller are unrelated and excluded"
+  },
+  {
+   "name": "rewards_out_only_to_sender",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and u != A0 and not called(\"MockToken_RWD.transferFrom\") and post(\"MockToken_RWD.balanceOf\", u) < pre(\"MockToken_RWD.balanceOf\", u)",
+   "why": "no reward token loss for others (excluding legitimate transferFrom by an approved spender)"
+  },
+  {
+   "name": "stake_token_no_third_party",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and u != A0 and u != A3 and not called(\"MockToken_STK.transferFrom\") and post(\"MockToken_STK.balanceOf\", u) < pre(\"MockToken_STK.balanceOf\", u)",
+   "why": "no stake token loss for others (excluding legitimate transferFrom by an approved spender)"
+  }
+ ],
+ "add": [
+  {
+   "name": "import_receives_tokens",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"importLegacy\") and post(\"MockToken_STK.balanceOf\", A0) - pre(\"MockToken_STK.balanceOf\", A0) != post(\"userInfo\", sender, \"amount\") - pre(\"userInfo\", sender, \"amount\")",
+   "why": "imported stake is credited only for stake tokens actually received"
+  }
+ ]
+}

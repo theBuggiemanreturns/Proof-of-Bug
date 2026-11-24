@@ -1,0 +1,19 @@
+{
+ "case": "B06",
+ "rules": {
+  "dep_exact": "called(\"deposit\") and ok and post(\"reserves\") != pre(\"reserves\") + arg(0)",
+  "wd_exact": "called(\"withdraw\") and ok and post(\"reserves\") + arg(0) != pre(\"reserves\")",
+  "breaker": "ok and pre(\"paused\") != 0 and post(\"paused\") == 0 and post(\"reserves\") < 10",
+  "unpause_works": "called(\"unpause\") and reverted and (sender == pre(\"guardian\") and pre(\"reserves\") >= 10)",
+  "paused_blocks": "called(\"withdraw\") and ok and pre(\"paused\") != 0",
+  "unpause_effect": "called(\"unpause\") and ok and post(\"paused\") != 0",
+  "trips": "called(\"withdraw\") and ok and post(\"reserves\") < 10 and post(\"paused\") == 0",
+  "auth_unpause": "ok and sender != pre(\"guardian\") and pre(\"paused\") != 0 and post(\"paused\") == 0",
+  "no_trip_early": "called(\"withdraw\") and ok and post(\"reserves\") >= 10 and pre(\"paused\") == 0 and post(\"paused\") != 0"
+ },
+ "strength": 1.0,
+ "holds_by_construction": [
+  "guardian_fixed"
+ ],
+ "invariants": {}
+}

@@ -1,0 +1,254 @@
+{
+ "rules": [
+  {
+   "name": "shares_ledger",
+   "family": "ledger",
+   "params": {
+    "accounts": "balanceOf",
+    "total": "totalSupply"
+   },
+   "expr": "",
+   "why": "share balances sum to totalSupply"
+  },
+  {
+   "name": "fair_redeem",
+   "family": "fair_redemption",
+   "params": {
+    "fn": "redeem",
+    "shares_arg": "0",
+    "assets": "pre(\"TokenC01.balanceOf\", A0)",
+    "shares": "totalSupply"
+   },
+   "expr": "",
+   "why": "redeem pays at most pro-rata"
+  },
+  {
+   "name": "fair_redeem_custom",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"redeem\") and wide(ret) * pre(\"totalSupply\") > wide(arg(0)) * pre(\"TokenC01.balanceOf\", A0)",
+   "why": "assets out <= shares*totalAssets/totalSupply (rounded down)"
+  },
+  {
+   "name": "fair_deposit_custom",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"deposit\") and pre(\"totalSupply\") > 0 and wide(ret) * pre(\"TokenC01.balanceOf\", A0) > wide(arg(0)) * pre(\"totalSupply\")",
+   "why": "shares minted <= assets*supply/totalAssets (rounded down)"
+  },
+  {
+   "name": "first_deposit_one_to_one",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"deposit\") and pre(\"totalSupply\") == 0 and ret != arg(0)",
+   "why": "empty vault mints 1:1"
+  },
+  {
+   "name": "share_price_monotone_custom",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and pre(\"totalSupply\") > 0 and post(\"totalSupply\") > 0 and wide(post(\"TokenC01.balanceOf\", A0)) * pre(\"totalSupply\") < wide(pre(\"TokenC01.balanceOf\", A0)) * post(\"totalSupply\")",
+   "why": "assets per share never drop for remaining holders"
+  },
+  {
+   "name": "share_price",
+   "family": "share_price_monotone",
+   "params": {
+    "assets": "post(\"TokenC01.balanceOf\", A0)",
+    "shares": "totalSupply"
+   },
+   "expr": "",
+   "why": "assets per share never drop"
+  },
+  {
+   "name": "deposit_nonzero",
+   "family": "nonzero_mint",
+   "params": {
+    "fn": "deposit",
+    "amount_arg": "0"
+   },
+   "expr": "",
+   "why": "depositing assets must mint shares (inflation attack)"
+  },
+  {
+   "name": "deposit_assets_in",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"deposit\") and post(\"TokenC01.balanceOf\", A0) != pre(\"TokenC01.balanceOf\", A0) + arg(0)",
+   "why": "vault receives exactly the deposited assets"
+  },
+  {
+   "name": "deposit_payer_pays",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"deposit\") and post(\"TokenC01.balanceOf\", sender) + arg(0) != pre(\"TokenC01.balanceOf\", sender)",
+   "why": "depositor pays exactly assets"
+  },
+  {
+   "name": "deposit_supply_up",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"deposit\") and post(\"totalSupply\") != pre(\"totalSupply\") + ret",
+   "why": "totalSupply rises by shares minted"
+  },
+  {
+   "name": "deposit_receiver_credit",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"deposit\") and post(\"balanceOf\", arg(1)) != pre(\"balanceOf\", arg(1)) + ret",
+   "why": "receiver credited exactly shares"
+  },
+  {
+   "name": "redeem_supply_down",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"redeem\") and post(\"totalSupply\") + arg(0) != pre(\"totalSupply\")",
+   "why": "totalSupply falls by redeemed shares"
+  },
+  {
+   "name": "redeem_owner_debit",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"redeem\") and post(\"balanceOf\", arg(2)) + arg(0) != pre(\"balanceOf\", arg(2))",
+   "why": "owner loses exactly redeemed shares"
+  },
+  {
+   "name": "redeem_assets_out",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"redeem\") and arg(1) != A0 and post(\"TokenC01.balanceOf\", A0) + ret != pre(\"TokenC01.balanceOf\", A0)",
+   "why": "vault pays exactly ret"
+  },
+  {
+   "name": "redeem_receiver_paid",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"redeem\") and arg(1) != A0 and post(\"TokenC01.balanceOf\", arg(1)) != pre(\"TokenC01.balanceOf\", arg(1)) + ret",
+   "why": "receiver gets exactly ret"
+  },
+  {
+   "name": "redeem_allowance_spent",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"redeem\") and sender != arg(2) and pre(\"allowance\", arg(2), sender) != 115792089237316195423570985008687907853269984665640564039457584007913129639935 and post(\"allowance\", arg(2), sender) + arg(0) != pre(\"allowance\", arg(2), sender)",
+   "why": "third-party redeem spends exactly the shares of allowance"
+  },
+  {
+   "name": "redeem_needs_allowance",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"redeem\") and sender != arg(2) and pre(\"allowance\", arg(2), sender) < arg(0)",
+   "why": "cannot redeem others' shares beyond allowance"
+  },
+  {
+   "name": "share_loss_allowance",
+   "family": "no_loss_beyond_allowance",
+   "params": {
+    "balance": "balanceOf",
+    "allowance": "allowance"
+   },
+   "expr": "",
+   "why": "others can take shares only up to allowance"
+  },
+  {
+   "name": "share_loss_custom",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and post(\"balanceOf\", u) < pre(\"balanceOf\", u) and pre(\"balanceOf\", u) > post(\"balanceOf\", u) + pre(\"allowance\", u, sender)",
+   "why": "no share loss beyond allowance"
+  },
+  {
+   "name": "asset_third_party",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"deposit\") or called(\"redeem\") or called(\"transfer\") or called(\"approve\")) and u != sender and u != A0 and post(\"TokenC01.balanceOf\", u) < pre(\"TokenC01.balanceOf\", u)",
+   "why": "vault calls never take underlying from non-callers"
+  },
+  {
+   "name": "transfer_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"transfer\") and arg(0) != sender and (post(\"balanceOf\", sender) + arg(0) != pre(\"balanceOf\", sender) or post(\"balanceOf\", arg(0)) != pre(\"balanceOf\", arg(0)) + arg(0))",
+   "why": "share transfer moves exactly amount"
+  },
+  {
+   "name": "transfer_supply",
+   "family": "no_side_effect",
+   "params": {
+    "fn": "transfer",
+    "value": "post(\"totalSupply\")",
+    "before": "pre(\"totalSupply\")"
+   },
+   "expr": "",
+   "why": "transfer never changes supply"
+  },
+  {
+   "name": "transfer_assets",
+   "family": "no_side_effect",
+   "params": {
+    "fn": "transfer",
+    "value": "post(\"TokenC01.balanceOf\", A0)",
+    "before": "pre(\"TokenC01.balanceOf\", A0)"
+   },
+   "expr": "",
+   "why": "transfer never moves assets"
+  },
+  {
+   "name": "approve_supply",
+   "family": "no_side_effect",
+   "params": {
+    "fn": "approve",
+    "value": "post(\"totalSupply\")",
+    "before": "pre(\"totalSupply\")"
+   },
+   "expr": "",
+   "why": "approve never changes supply"
+  },
+  {
+   "name": "approve_sets",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"approve\") and post(\"allowance\", sender, arg(0)) != arg(1)",
+   "why": "approve sets the allowance"
+  },
+  {
+   "name": "approve_no_balance",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"approve\") and post(\"balanceOf\", u) != pre(\"balanceOf\", u)",
+   "why": "approve moves no shares"
+  },
+  {
+   "name": "redeem_works",
+   "family": "must_succeed",
+   "params": {
+    "fn": "redeem",
+    "condition": "sender == arg(2) and arg(0) > 0 and arg(0) <= pre(\"balanceOf\", sender) and arg(1) != A0"
+   },
+   "expr": "",
+   "why": "owner can always redeem own shares"
+  },
+  {
+   "name": "deposit_works",
+   "family": "must_succeed",
+   "params": {
+    "fn": "deposit",
+    "condition": "arg(0) > 0 and arg(0) <= pre(\"TokenC01.balanceOf\", sender) and arg(0) <= pre(\"TokenC01.allowance\", sender, A0) and arg(0) <= 1000000 and sender != A0"
+   },
+   "expr": "",
+   "why": "funded deposit must work"
+  }
+ ],
+ "invariants": [
+  {
+   "name": "ledger",
+   "expr": "post_sum(\"balanceOf\") != post(\"totalSupply\")",
+   "why": "sum of shares equals totalSupply"
+  },
+  {
+   "name": "backed",
+   "expr": "post(\"totalSupply\") > 0 and post(\"TokenC01.balanceOf\", A0) == 0",
+   "why": "outstanding shares always backed by assets"
+  }
+ ]
+}

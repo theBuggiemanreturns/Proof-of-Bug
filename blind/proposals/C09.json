@@ -1,0 +1,212 @@
+{
+ "rules": [
+  {
+   "name": "ledger",
+   "family": "ledger",
+   "params": {
+    "accounts": "balanceOf",
+    "total": "totalSupply"
+   },
+   "expr": "",
+   "why": "shares sum to supply"
+  },
+  {
+   "name": "share_price",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and wide((post(\"TokenC09.balanceOf\", A0) + 1)) * (pre(\"totalSupply\") + 1000000) < wide((pre(\"TokenC09.balanceOf\", A0) + 1)) * (post(\"totalSupply\") + 1000000)",
+   "why": "virtual assets per virtual share never drop"
+  },
+  {
+   "name": "deposit_fair",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"deposit\") and wide(ret) * (pre(\"TokenC09.balanceOf\", A0) + 1) > wide(arg(0)) * (pre(\"totalSupply\") + 1000000)",
+   "why": "deposit mints at most pro-rata (round down)"
+  },
+  {
+   "name": "mint_fair",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"mint\") and wide(ret) * (pre(\"totalSupply\") + 1000000) < wide(arg(0)) * (pre(\"TokenC09.balanceOf\", A0) + 1)",
+   "why": "mint charges at least pro-rata (round up)"
+  },
+  {
+   "name": "redeem_fair",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"redeem\") and wide(pre(\"TokenC09.balanceOf\", A0) - post(\"TokenC09.balanceOf\", A0)) * (pre(\"totalSupply\") + 1000000) > wide(arg(0)) * (pre(\"TokenC09.balanceOf\", A0) + 1)",
+   "why": "total outflow (assets+fee) at most pro-rata"
+  },
+  {
+   "name": "withdraw_fair",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and wide(pre(\"TokenC09.balanceOf\", A0) - post(\"TokenC09.balanceOf\", A0)) * (pre(\"totalSupply\") + 1000000) > wide(ret) * (pre(\"TokenC09.balanceOf\", A0) + 1)",
+   "why": "total outflow at most pro-rata of shares burned"
+  },
+  {
+   "name": "withdraw_shares_enough",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and wide(ret) * (pre(\"TokenC09.balanceOf\", A0) + 1) * 9990 < wide(arg(0)) * (pre(\"totalSupply\") + 1000000) * 10000",
+   "why": "withdraw burns enough shares to cover assets plus fee"
+  },
+  {
+   "name": "deposit_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"deposit\") and (post(\"TokenC09.balanceOf\", A0) != pre(\"TokenC09.balanceOf\", A0) + arg(0) or post(\"totalSupply\") != pre(\"totalSupply\") + ret or post(\"balanceOf\", arg(1)) != pre(\"balanceOf\", arg(1)) + ret)",
+   "why": "deposit books exactly"
+  },
+  {
+   "name": "mint_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"mint\") and (post(\"TokenC09.balanceOf\", A0) != pre(\"TokenC09.balanceOf\", A0) + ret or post(\"totalSupply\") != pre(\"totalSupply\") + arg(0) or post(\"balanceOf\", arg(1)) != pre(\"balanceOf\", arg(1)) + arg(0))",
+   "why": "mint books exactly"
+  },
+  {
+   "name": "redeem_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"redeem\") and (post(\"totalSupply\") + arg(0) != pre(\"totalSupply\") or post(\"balanceOf\", arg(2)) + arg(0) != pre(\"balanceOf\", arg(2)))",
+   "why": "redeem burns exactly shares"
+  },
+  {
+   "name": "redeem_receiver",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"redeem\") and arg(1) != A0 and arg(1) != 65248 and post(\"TokenC09.balanceOf\", arg(1)) != pre(\"TokenC09.balanceOf\", arg(1)) + ret",
+   "why": "receiver gets ret"
+  },
+  {
+   "name": "withdraw_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and (post(\"totalSupply\") + ret != pre(\"totalSupply\") or post(\"balanceOf\", arg(2)) + ret != pre(\"balanceOf\", arg(2)))",
+   "why": "withdraw burns ret shares"
+  },
+  {
+   "name": "withdraw_receiver",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and arg(1) != A0 and arg(1) != 65248 and post(\"TokenC09.balanceOf\", arg(1)) != pre(\"TokenC09.balanceOf\", arg(1)) + arg(0)",
+   "why": "receiver gets exactly assets"
+  },
+  {
+   "name": "redeem_fee",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"redeem\") and arg(1) != 65248 and (post(\"TokenC09.balanceOf\", 65248) - pre(\"TokenC09.balanceOf\", 65248)) * 10000 < ret * 10",
+   "why": "exit fee charged on redeem"
+  },
+  {
+   "name": "withdraw_fee",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and arg(1) != 65248 and (post(\"TokenC09.balanceOf\", 65248) - pre(\"TokenC09.balanceOf\", 65248)) * 10000 < arg(0) * 10",
+   "why": "exit fee charged on withdraw"
+  },
+  {
+   "name": "fee_never_lost",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and post(\"TokenC09.balanceOf\", 65248) < pre(\"TokenC09.balanceOf\", 65248)",
+   "why": "fee recipient never loses"
+  },
+  {
+   "name": "fee_not_on_entry",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"deposit\") or called(\"mint\") or called(\"transfer\") or called(\"approve\")) and post(\"TokenC09.balanceOf\", 65248) != pre(\"TokenC09.balanceOf\", 65248)",
+   "why": "no fee on entry/transfer"
+  },
+  {
+   "name": "redeem_allowance",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"redeem\") and sender != arg(2) and pre(\"allowance\", arg(2), sender) != 115792089237316195423570985008687907853269984665640564039457584007913129639935 and post(\"allowance\", arg(2), sender) + arg(0) != pre(\"allowance\", arg(2), sender)",
+   "why": "third-party redeem spends allowance"
+  },
+  {
+   "name": "withdraw_allowance",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and sender != arg(2) and pre(\"allowance\", arg(2), sender) != 115792089237316195423570985008687907853269984665640564039457584007913129639935 and post(\"allowance\", arg(2), sender) + ret != pre(\"allowance\", arg(2), sender)",
+   "why": "third-party withdraw spends allowance"
+  },
+  {
+   "name": "loss_allowance",
+   "family": "no_loss_beyond_allowance",
+   "params": {
+    "balance": "balanceOf",
+    "allowance": "allowance"
+   },
+   "expr": "",
+   "why": "others take only approved shares"
+  },
+  {
+   "name": "loss_custom",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and post(\"balanceOf\", u) < pre(\"balanceOf\", u) and pre(\"balanceOf\", u) > post(\"balanceOf\", u) + pre(\"allowance\", u, sender)",
+   "why": "no loss beyond allowance"
+  },
+  {
+   "name": "asset_third_party",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"deposit\") or called(\"mint\") or called(\"redeem\") or called(\"withdraw\") or called(\"transfer\") or called(\"approve\")) and u != sender and u != A0 and post(\"TokenC09.balanceOf\", u) < pre(\"TokenC09.balanceOf\", u)",
+   "why": "vault calls never take others' WD"
+  },
+  {
+   "name": "deposit_nonzero",
+   "family": "nonzero_mint",
+   "params": {
+    "fn": "deposit",
+    "amount_arg": "0"
+   },
+   "expr": "",
+   "why": "deposit mints shares"
+  },
+  {
+   "name": "transfer_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"transfer\") and arg(0) != sender and (post(\"balanceOf\", sender) + arg(1) != pre(\"balanceOf\", sender) or post(\"balanceOf\", arg(0)) != pre(\"balanceOf\", arg(0)) + arg(1))",
+   "why": "share transfer exact"
+  },
+  {
+   "name": "transfer_no_supply",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"transfer\") or called(\"approve\")) and (post(\"totalSupply\") != pre(\"totalSupply\") or post(\"TokenC09.balanceOf\", A0) != pre(\"TokenC09.balanceOf\", A0))",
+   "why": "transfer/approve move no assets"
+  },
+  {
+   "name": "approve_sets",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"approve\") and post(\"allowance\", sender, arg(0)) != arg(1)",
+   "why": "approve sets allowance"
+  },
+  {
+   "name": "deposit_works",
+   "family": "must_succeed",
+   "params": {
+    "fn": "deposit",
+    "condition": "arg(0) > 0 and arg(0) <= pre(\"TokenC09.balanceOf\", sender) and arg(0) <= 1000000000 and (arg(0) * (pre(\"totalSupply\") + 1000000)) // (pre(\"TokenC09.balanceOf\", A0) + 1) > 0 and sender != A0"
+   },
+   "expr": "",
+   "why": "funded deposit works"
+  }
+ ],
+ "invariants": [
+  {
+   "name": "ledger",
+   "expr": "post_sum(\"balanceOf\") != post(\"totalSupply\")",
+   "why": "share ledger"
+  }
+ ]
+}

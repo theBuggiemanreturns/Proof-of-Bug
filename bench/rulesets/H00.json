@@ -1,0 +1,17 @@
+{
+ "case": "H00",
+ "rules": {
+  "no_mint": "ok and post_sum(\"credit\") > post(\"totalPaid\")",
+  "fill_works": "called(\"fill\") and reverted and (pre(\"offer\", arg(0)) + pre(\"offer\", arg(1)) < 128)",
+  "place_works": "called(\"place\") and reverted and (arg(0) > 0 and arg(0) <= 100 and pre(\"offer\", sender) == 0)",
+  "fill_clears": "called(\"fill\") and ok and post(\"offer\", arg(0)) != 0",
+  "fill_clears_b": "called(\"fill\") and ok and post(\"offer\", arg(1)) != 0",
+  "place_exact": "called(\"place\") and ok and post(\"offer\", sender) != arg(0)",
+  "conserved": "called(\"fill\") and ok and post_sum(\"credit\") + pre(\"totalPaid\") != pre_sum(\"credit\") + post(\"totalPaid\")"
+ },
+ "strength": 0.8888888888888888,
+ "holds_by_construction": [],
+ "invariants": {
+  "no_mint_inv": "post_sum(\"credit\") > post(\"totalPaid\")"
+ }
+}

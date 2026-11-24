@@ -1,0 +1,237 @@
+{
+ "rules": [
+  {
+   "name": "ledger",
+   "family": "ledger",
+   "params": {
+    "accounts": "userInfo.amount",
+    "total": "totalStaked"
+   },
+   "expr": "",
+   "why": "user stakes sum to totalStaked"
+  },
+  {
+   "name": "ledger_custom",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and post_sum(\"userInfo\", \"amount\") != post(\"totalStaked\")",
+   "why": "user amounts sum to totalStaked"
+  },
+  {
+   "name": "staked_backed",
+   "family": "bounded_by",
+   "params": {
+    "amount": "post(\"totalStaked\")",
+    "backing": "post(\"TokenC10_LP.balanceOf\", A0)"
+   },
+   "expr": "",
+   "why": "stakes held in LP"
+  },
+  {
+   "name": "acc_monotone",
+   "family": "monotone",
+   "params": {
+    "value": "post(\"accRewardPerShare\")"
+   },
+   "expr": "",
+   "why": "index only rises"
+  },
+  {
+   "name": "time_monotone",
+   "family": "monotone",
+   "params": {
+    "value": "post(\"lastRewardTime\")"
+   },
+   "expr": "",
+   "why": "lastRewardTime only rises"
+  },
+  {
+   "name": "debt_synced",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"deposit\") or called(\"withdraw\") or called(\"harvest\")) and post(\"userInfo\", sender, \"rewardDebt\") != (post(\"userInfo\", sender, \"amount\") * post(\"accRewardPerShare\")) // 1000000000000",
+   "why": "rewardDebt checkpointed to the final amount"
+  },
+  {
+   "name": "debt_le_accrued",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and post(\"userInfo\", u, \"rewardDebt\") * 1000000000000 > post(\"userInfo\", u, \"amount\") * post(\"accRewardPerShare\")",
+   "why": "no user's debt exceeds accrued (pending never negative)"
+  },
+  {
+   "name": "harvest_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"harvest\") and sender != A0 and post(\"TokenC10_FRM.balanceOf\", sender) + pre(\"userInfo\", sender, \"rewardDebt\") > pre(\"TokenC10_FRM.balanceOf\", sender) + (pre(\"userInfo\", sender, \"amount\") * post(\"accRewardPerShare\")) // 1000000000000",
+   "why": "harvest pays at most pending"
+  },
+  {
+   "name": "deposit_pays_pending_only",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"deposit\") or called(\"withdraw\")) and sender != A0 and post(\"TokenC10_FRM.balanceOf\", sender) + pre(\"userInfo\", sender, \"rewardDebt\") > pre(\"TokenC10_FRM.balanceOf\", sender) + (pre(\"userInfo\", sender, \"amount\") * post(\"accRewardPerShare\")) // 1000000000000",
+   "why": "deposit/withdraw pay at most pending on the old amount"
+  },
+  {
+   "name": "emission_bound",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and 1000000000000000000000000 > post(\"TokenC10_FRM.balanceOf\", A0) + post(\"rewardPerSecond\") * (now - 1)",
+   "why": "total emitted never exceeds rate times elapsed"
+  },
+  {
+   "name": "accrual",
+   "family": "accrual_bounded",
+   "params": {
+    "paid": "1000000000000000000000000 - post(\"TokenC10_FRM.balanceOf\", A0)",
+    "rate": "post(\"rewardPerSecond\")",
+    "start": "1"
+   },
+   "expr": "",
+   "why": "emissions bounded by rate*time"
+  },
+  {
+   "name": "acc_step",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and pre(\"totalStaked\") > 0 and wide(post(\"accRewardPerShare\") - pre(\"accRewardPerShare\")) * pre(\"totalStaked\") > wide(now - pre(\"lastRewardTime\")) * pre(\"rewardPerSecond\") * 1000000000000",
+   "why": "index growth bounded by emission"
+  },
+  {
+   "name": "deposit_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"deposit\") and (post(\"userInfo\", sender, \"amount\") != pre(\"userInfo\", sender, \"amount\") + arg(0) or post(\"totalStaked\") != pre(\"totalStaked\") + arg(0) or post(\"TokenC10_LP.balanceOf\", A0) != pre(\"TokenC10_LP.balanceOf\", A0) + arg(0))",
+   "why": "deposit books exactly"
+  },
+  {
+   "name": "withdraw_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and (post(\"userInfo\", sender, \"amount\") + arg(0) != pre(\"userInfo\", sender, \"amount\") or post(\"totalStaked\") + arg(0) != pre(\"totalStaked\") or post(\"TokenC10_LP.balanceOf\", A0) + arg(0) != pre(\"TokenC10_LP.balanceOf\", A0) or post(\"TokenC10_LP.balanceOf\", sender) != pre(\"TokenC10_LP.balanceOf\", sender) + arg(0))",
+   "why": "withdraw returns exactly"
+  },
+  {
+   "name": "withdraw_limit",
+   "family": "never_when",
+   "params": {
+    "fn": "withdraw",
+    "forbidden": "arg(0) > pre(\"userInfo\", sender, \"amount\")"
+   },
+   "expr": "",
+   "why": "cannot withdraw more than staked"
+  },
+  {
+   "name": "emergency_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"emergencyWithdraw\") and (post(\"userInfo\", sender, \"amount\") != 0 or post(\"userInfo\", sender, \"rewardDebt\") != 0 or post(\"totalStaked\") + pre(\"userInfo\", sender, \"amount\") != pre(\"totalStaked\") or post(\"TokenC10_LP.balanceOf\", sender) != pre(\"TokenC10_LP.balanceOf\", sender) + pre(\"userInfo\", sender, \"amount\") or post(\"TokenC10_FRM.balanceOf\", A0) != pre(\"TokenC10_FRM.balanceOf\", A0))",
+   "why": "emergency returns full stake, no rewards"
+  },
+  {
+   "name": "harvest_no_stake",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"harvest\") and (post(\"userInfo\", u, \"amount\") != pre(\"userInfo\", u, \"amount\") or post(\"totalStaked\") != pre(\"totalStaked\"))",
+   "why": "harvest moves no stake"
+  },
+  {
+   "name": "updatepool_no_pay",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"updatePool\") or called(\"setRewardPerSecond\")) and (post(\"TokenC10_FRM.balanceOf\", A0) != pre(\"TokenC10_FRM.balanceOf\", A0) or post(\"TokenC10_LP.balanceOf\", A0) != pre(\"TokenC10_LP.balanceOf\", A0))",
+   "why": "pool update pays nothing"
+  },
+  {
+   "name": "others_amount",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and (post(\"userInfo\", u, \"amount\") != pre(\"userInfo\", u, \"amount\") or post(\"userInfo\", u, \"rewardDebt\") != pre(\"userInfo\", u, \"rewardDebt\"))",
+   "why": "others' positions untouched"
+  },
+  {
+   "name": "reward_to_caller",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and u != A0 and post(\"TokenC10_FRM.balanceOf\", u) != pre(\"TokenC10_FRM.balanceOf\", u) and not called(\"TokenC10_FRM.transfer\") and not called(\"TokenC10_FRM.transferFrom\")",
+   "why": "rewards paid only to caller"
+  },
+  {
+   "name": "lp_third_party",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"deposit\") or called(\"withdraw\") or called(\"harvest\") or called(\"emergencyWithdraw\") or called(\"updatePool\")) and u != sender and u != A0 and post(\"TokenC10_LP.balanceOf\", u) < pre(\"TokenC10_LP.balanceOf\", u)",
+   "why": "farm calls never take others' LP"
+  },
+  {
+   "name": "rate_auth",
+   "family": "authorized_change",
+   "params": {
+    "value": "post(\"rewardPerSecond\")",
+    "before": "pre(\"rewardPerSecond\")",
+    "admin": "pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "only owner sets rate"
+  },
+  {
+   "name": "owner_auth",
+   "family": "authorized_change",
+   "params": {
+    "value": "post(\"owner\")",
+    "before": "pre(\"owner\")",
+    "admin": "pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "owner fixed"
+  },
+  {
+   "name": "setrate_owner",
+   "family": "never_when",
+   "params": {
+    "fn": "setRewardPerSecond",
+    "forbidden": "sender != pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "owner only"
+  },
+  {
+   "name": "emergency_works",
+   "family": "must_succeed",
+   "params": {
+    "fn": "emergencyWithdraw",
+    "condition": "pre(\"userInfo\", sender, \"amount\") > 0 and sender != A0"
+   },
+   "expr": "",
+   "why": "staker can always emergency-exit"
+  },
+  {
+   "name": "withdraw_works",
+   "family": "must_succeed",
+   "params": {
+    "fn": "withdraw",
+    "condition": "arg(0) <= pre(\"userInfo\", sender, \"amount\") and sender != A0"
+   },
+   "expr": "",
+   "why": "staker can withdraw own stake"
+  }
+ ],
+ "invariants": [
+  {
+   "name": "ledger",
+   "expr": "post_sum(\"userInfo\", \"amount\") != post(\"totalStaked\")",
+   "why": "stake ledger"
+  },
+  {
+   "name": "backed",
+   "expr": "post(\"totalStaked\") > post(\"TokenC10_LP.balanceOf\", A0)",
+   "why": "stake backed"
+  },
+  {
+   "name": "debt_le_accrued",
+   "expr": "post(\"userInfo\", u, \"rewardDebt\") * 1000000000000 > post(\"userInfo\", u, \"amount\") * post(\"accRewardPerShare\")",
+   "why": "pending never negative"
+  }
+ ]
+}

@@ -1,0 +1,272 @@
+{
+ "rules": [
+  {
+   "name": "eth_backed",
+   "family": "bounded_by",
+   "params": {
+    "amount": "post_sum(\"pendingWithdrawals\")",
+    "backing": "post(\"ETH\", A0)"
+   },
+   "expr": "",
+   "why": "pending withdrawals backed by ETH"
+  },
+  {
+   "name": "id_monotone",
+   "family": "monotone",
+   "params": {
+    "value": "post(\"nextAuctionId\")"
+   },
+   "expr": "",
+   "why": "ids rise"
+  },
+  {
+   "name": "create_id",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"createAuction\") and (ret != pre(\"nextAuctionId\") or post(\"nextAuctionId\") != pre(\"nextAuctionId\") + 1)",
+   "why": "create uses next id"
+  },
+  {
+   "name": "create_fields",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"createAuction\") and (post(\"auctions\", ret, \"seller\") != sender or post(\"auctions\", ret, \"lotAmount\") != arg(0) or post(\"auctions\", ret, \"reservePrice\") != arg(1) or post(\"auctions\", ret, \"endTime\") != now + arg(2) or post(\"auctions\", ret, \"settled\") != 0 or post(\"auctions\", ret, \"highestBid\") != 0 or post(\"auctions\", ret, \"highestBidder\") != 0)",
+   "why": "auction recorded"
+  },
+  {
+   "name": "create_escrow",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"createAuction\") and post(\"TokenC12.balanceOf\", A0) != pre(\"TokenC12.balanceOf\", A0) + arg(0)",
+   "why": "lot escrowed exactly"
+  },
+  {
+   "name": "create_fresh",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"createAuction\") and pre(\"auctions\", ret, \"seller\") != 0",
+   "why": "never overwrite"
+  },
+  {
+   "name": "create_params",
+   "family": "never_when",
+   "params": {
+    "fn": "createAuction",
+    "forbidden": "arg(0) == 0 or arg(2) == 0 or arg(2) > 2592000"
+   },
+   "expr": "",
+   "why": "valid params"
+  },
+  {
+   "name": "bid_window",
+   "family": "never_when",
+   "params": {
+    "fn": "bid",
+    "forbidden": "pre(\"auctions\", arg(0), \"seller\") == 0 or pre(\"auctions\", arg(0), \"settled\") != 0 or now >= pre(\"auctions\", arg(0), \"endTime\") or sender == pre(\"auctions\", arg(0), \"seller\")"
+   },
+   "expr": "",
+   "why": "bids only on live auctions by non-sellers"
+  },
+  {
+   "name": "bid_escrow",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"bid\") and post(\"ETH\", A0) != pre(\"ETH\", A0) + post(\"auctions\", arg(0), \"highestBid\")",
+   "why": "bid value held and recorded"
+  },
+  {
+   "name": "bid_leader",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"bid\") and post(\"auctions\", arg(0), \"highestBidder\") != sender",
+   "why": "bidder becomes leader"
+  },
+  {
+   "name": "bid_increment",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"bid\") and pre(\"auctions\", arg(0), \"highestBid\") > 0 and post(\"auctions\", arg(0), \"highestBid\") * 10000 < pre(\"auctions\", arg(0), \"highestBid\") * 10500",
+   "why": "min 5% increment"
+  },
+  {
+   "name": "bid_reserve",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"bid\") and pre(\"auctions\", arg(0), \"highestBid\") == 0 and (post(\"auctions\", arg(0), \"highestBid\") < pre(\"auctions\", arg(0), \"reservePrice\") or post(\"auctions\", arg(0), \"highestBid\") == 0)",
+   "why": "first bid meets reserve"
+  },
+  {
+   "name": "bid_refund_credit",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"bid\") and post_sum(\"pendingWithdrawals\") != pre_sum(\"pendingWithdrawals\") + pre(\"auctions\", arg(0), \"highestBid\")",
+   "why": "outbid amount credited for withdrawal"
+  },
+  {
+   "name": "bid_refund_to_prev",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"bid\") and pre(\"auctions\", arg(0), \"highestBidder\") != 0 and post(\"pendingWithdrawals\", pre(\"auctions\", arg(0), \"highestBidder\")) != pre(\"pendingWithdrawals\", pre(\"auctions\", arg(0), \"highestBidder\")) + pre(\"auctions\", arg(0), \"highestBid\")",
+   "why": "previous leader credited"
+  },
+  {
+   "name": "bid_extension",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"bid\") and (post(\"auctions\", arg(0), \"endTime\") < now + 600 or post(\"auctions\", arg(0), \"endTime\") < pre(\"auctions\", arg(0), \"endTime\"))",
+   "why": "anti-snipe extension; end never shortened"
+  },
+  {
+   "name": "highest_monotone",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"bid\") or called(\"settle\") or called(\"cancel\")) and post(\"auctions\", arg(0), \"highestBid\") < pre(\"auctions\", arg(0), \"highestBid\")",
+   "why": "highest bid never drops"
+  },
+  {
+   "name": "endtime_monotone",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"bid\") or called(\"settle\") or called(\"cancel\")) and pre(\"auctions\", arg(0), \"seller\") != 0 and post(\"auctions\", arg(0), \"endTime\") < pre(\"auctions\", arg(0), \"endTime\")",
+   "why": "end time never shortened"
+  },
+  {
+   "name": "settle_timing",
+   "family": "never_when",
+   "params": {
+    "fn": "settle",
+    "forbidden": "pre(\"auctions\", arg(0), \"seller\") == 0 or pre(\"auctions\", arg(0), \"settled\") != 0 or now < pre(\"auctions\", arg(0), \"endTime\")"
+   },
+   "expr": "",
+   "why": "settle only after end, once"
+  },
+  {
+   "name": "settle_with_bid",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"settle\") and pre(\"auctions\", arg(0), \"highestBidder\") != 0 and (post_sum(\"pendingWithdrawals\") != pre_sum(\"pendingWithdrawals\") + pre(\"auctions\", arg(0), \"highestBid\") or post(\"pendingWithdrawals\", pre(\"auctions\", arg(0), \"seller\")) != pre(\"pendingWithdrawals\", pre(\"auctions\", arg(0), \"seller\")) + pre(\"auctions\", arg(0), \"highestBid\") or post(\"TokenC12.balanceOf\", A0) + pre(\"auctions\", arg(0), \"lotAmount\") != pre(\"TokenC12.balanceOf\", A0))",
+   "why": "seller credited, lot released"
+  },
+  {
+   "name": "settle_lot_to_winner",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"settle\") and pre(\"auctions\", arg(0), \"highestBidder\") != 0 and pre(\"auctions\", arg(0), \"highestBidder\") != A0 and post(\"TokenC12.balanceOf\", pre(\"auctions\", arg(0), \"highestBidder\")) != pre(\"TokenC12.balanceOf\", pre(\"auctions\", arg(0), \"highestBidder\")) + pre(\"auctions\", arg(0), \"lotAmount\")",
+   "why": "winner gets the lot"
+  },
+  {
+   "name": "settle_no_bid",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"settle\") and pre(\"auctions\", arg(0), \"highestBidder\") == 0 and (post(\"TokenC12.balanceOf\", pre(\"auctions\", arg(0), \"seller\")) != pre(\"TokenC12.balanceOf\", pre(\"auctions\", arg(0), \"seller\")) + pre(\"auctions\", arg(0), \"lotAmount\") or post_sum(\"pendingWithdrawals\") != pre_sum(\"pendingWithdrawals\"))",
+   "why": "no bids: lot back to seller"
+  },
+  {
+   "name": "settle_marks",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"settle\") or called(\"cancel\")) and post(\"auctions\", arg(0), \"settled\") == 0",
+   "why": "settle/cancel mark settled"
+  },
+  {
+   "name": "cancel_auth",
+   "family": "never_when",
+   "params": {
+    "fn": "cancel",
+    "forbidden": "sender != pre(\"auctions\", arg(0), \"seller\") or pre(\"auctions\", arg(0), \"settled\") != 0 or pre(\"auctions\", arg(0), \"highestBidder\") != 0"
+   },
+   "expr": "",
+   "why": "only seller, unsettled, no bids"
+  },
+  {
+   "name": "cancel_returns_lot",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"cancel\") and post(\"TokenC12.balanceOf\", A0) + pre(\"auctions\", arg(0), \"lotAmount\") != pre(\"TokenC12.balanceOf\", A0)",
+   "why": "cancel returns lot"
+  },
+  {
+   "name": "settled_frozen",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"bid\") or called(\"settle\") or called(\"cancel\")) and pre(\"auctions\", arg(0), \"settled\") != 0 and (post(\"auctions\", arg(0), \"settled\") == 0 or post(\"auctions\", arg(0), \"highestBid\") != pre(\"auctions\", arg(0), \"highestBid\") or post(\"auctions\", arg(0), \"highestBidder\") != pre(\"auctions\", arg(0), \"highestBidder\"))",
+   "why": "settled auction frozen"
+  },
+  {
+   "name": "terms_immutable",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"bid\") or called(\"settle\") or called(\"cancel\")) and pre(\"auctions\", arg(0), \"seller\") != 0 and (post(\"auctions\", arg(0), \"seller\") != pre(\"auctions\", arg(0), \"seller\") or post(\"auctions\", arg(0), \"lotAmount\") != pre(\"auctions\", arg(0), \"lotAmount\") or post(\"auctions\", arg(0), \"reservePrice\") != pre(\"auctions\", arg(0), \"reservePrice\"))",
+   "why": "auction terms immutable"
+  },
+  {
+   "name": "withdraw_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and (post(\"pendingWithdrawals\", sender) != 0 or post(\"ETH\", A0) + pre(\"pendingWithdrawals\", sender) != pre(\"ETH\", A0))",
+   "why": "withdraw pays exactly the pending amount"
+  },
+  {
+   "name": "withdraw_nothing",
+   "family": "never_when",
+   "params": {
+    "fn": "withdraw",
+    "forbidden": "pre(\"pendingWithdrawals\", sender) == 0"
+   },
+   "expr": "",
+   "why": "nothing to withdraw"
+  },
+  {
+   "name": "exit_all",
+   "family": "exit_all",
+   "params": {
+    "fn": "withdraw",
+    "balance": "pendingWithdrawals"
+   },
+   "expr": "",
+   "why": "credited ETH always withdrawable"
+  },
+  {
+   "name": "pending_third_party",
+   "family": "no_third_party_loss",
+   "params": {
+    "balance": "pendingWithdrawals"
+   },
+   "expr": "",
+   "why": "no one loses credit in others' calls"
+  },
+  {
+   "name": "pending_only_withdraw",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and not called(\"withdraw\") and post_sum(\"pendingWithdrawals\") < pre_sum(\"pendingWithdrawals\")",
+   "why": "credits only drop by withdraw"
+  },
+  {
+   "name": "eth_out_only_withdraw",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and not called(\"withdraw\") and post(\"ETH\", A0) < pre(\"ETH\", A0)",
+   "why": "ETH leaves only via withdraw"
+  },
+  {
+   "name": "lot_third_party",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"createAuction\") or called(\"bid\") or called(\"settle\") or called(\"cancel\") or called(\"withdraw\")) and u != sender and u != A0 and post(\"TokenC12.balanceOf\", u) < pre(\"TokenC12.balanceOf\", u)",
+   "why": "no one loses lot tokens in others' calls"
+  }
+ ],
+ "invariants": [
+  {
+   "name": "eth_backed",
+   "expr": "post_sum(\"pendingWithdrawals\") > post(\"ETH\", A0)",
+   "why": "credits backed"
+  },
+  {
+   "name": "unlocked",
+   "expr": "post(\"locked\") != 1",
+   "why": "lock released"
+  }
+ ]
+}

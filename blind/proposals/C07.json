@@ -1,0 +1,204 @@
+{
+ "rules": [
+  {
+   "name": "id_monotone",
+   "family": "monotone",
+   "params": {
+    "value": "post(\"nextOrderId\")"
+   },
+   "expr": "",
+   "why": "order ids only increase"
+  },
+  {
+   "name": "place_id",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"place\") and (ret != pre(\"nextOrderId\") or post(\"nextOrderId\") != pre(\"nextOrderId\") + 1)",
+   "why": "place uses next id and increments"
+  },
+  {
+   "name": "place_fields",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"place\") and (post(\"orders\", ret, \"maker\") != sender or post(\"orders\", ret, \"amount\") != arg(0) or post(\"orders\", ret, \"price\") != arg(1) or post(\"orders\", ret, \"active\") == 0)",
+   "why": "place records the order"
+  },
+  {
+   "name": "place_escrow",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"place\") and (post(\"TokenC07_BASE.balanceOf\", A0) != pre(\"TokenC07_BASE.balanceOf\", A0) + arg(0) or post(\"TokenC07_BASE.balanceOf\", sender) + arg(0) != pre(\"TokenC07_BASE.balanceOf\", sender))",
+   "why": "place escrows exactly amount"
+  },
+  {
+   "name": "place_params",
+   "family": "never_when",
+   "params": {
+    "fn": "place",
+    "forbidden": "arg(0) == 0 or arg(1) == 0"
+   },
+   "expr": "",
+   "why": "zero amount/price rejected"
+  },
+  {
+   "name": "place_fresh_slot",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"place\") and pre(\"orders\", ret, \"maker\") != 0",
+   "why": "place never overwrites an existing order"
+  },
+  {
+   "name": "fill_inactive",
+   "family": "never_when",
+   "params": {
+    "fn": "fill",
+    "forbidden": "pre(\"orders\", arg(0), \"active\") == 0 or arg(1) == 0 or arg(1) > pre(\"orders\", arg(0), \"amount\")"
+   },
+   "expr": "",
+   "why": "only active orders fill, within amount"
+  },
+  {
+   "name": "fill_price",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"fill\") and (ret != ((arg(1) * pre(\"orders\", arg(0), \"price\") + 1000000000000000000 - 1) // 1000000000000000000) or ret > arg(2))",
+   "why": "taker pays ceil(amount*price) and respects maxQuote"
+  },
+  {
+   "name": "fill_maker_paid",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"fill\") and pre(\"orders\", arg(0), \"maker\") != sender and post(\"TokenC07_QUOTE.balanceOf\", pre(\"orders\", arg(0), \"maker\")) != pre(\"TokenC07_QUOTE.balanceOf\", pre(\"orders\", arg(0), \"maker\")) + ((arg(1) * pre(\"orders\", arg(0), \"price\") + 1000000000000000000 - 1) // 1000000000000000000)",
+   "why": "maker receives the quote"
+  },
+  {
+   "name": "fill_base_out",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"fill\") and (post(\"TokenC07_BASE.balanceOf\", A0) + arg(1) != pre(\"TokenC07_BASE.balanceOf\", A0) or post(\"TokenC07_BASE.balanceOf\", sender) != pre(\"TokenC07_BASE.balanceOf\", sender) + arg(1))",
+   "why": "taker receives exactly baseAmount"
+  },
+  {
+   "name": "fill_amount",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"fill\") and post(\"orders\", arg(0), \"amount\") + arg(1) != pre(\"orders\", arg(0), \"amount\")",
+   "why": "order amount reduced by fill"
+  },
+  {
+   "name": "fill_close",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"fill\") and ((post(\"orders\", arg(0), \"amount\") == 0 and post(\"orders\", arg(0), \"active\") != 0) or (post(\"orders\", arg(0), \"amount\") != 0 and post(\"orders\", arg(0), \"active\") == 0))",
+   "why": "order inactive exactly when empty"
+  },
+  {
+   "name": "fill_no_param_change",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"fill\") and (post(\"orders\", arg(0), \"price\") != pre(\"orders\", arg(0), \"price\") or post(\"orders\", arg(0), \"maker\") != pre(\"orders\", arg(0), \"maker\"))",
+   "why": "fill doesn't alter price/maker"
+  },
+  {
+   "name": "cancel_auth",
+   "family": "never_when",
+   "params": {
+    "fn": "cancel",
+    "forbidden": "sender != pre(\"orders\", arg(0), \"maker\") or pre(\"orders\", arg(0), \"active\") == 0"
+   },
+   "expr": "",
+   "why": "only maker cancels an active order"
+  },
+  {
+   "name": "cancel_refund",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"cancel\") and (post(\"TokenC07_BASE.balanceOf\", A0) + pre(\"orders\", arg(0), \"amount\") != pre(\"TokenC07_BASE.balanceOf\", A0) or post(\"orders\", arg(0), \"active\") != 0)",
+   "why": "cancel refunds exactly remaining amount and deactivates"
+  },
+  {
+   "name": "modify_auth",
+   "family": "never_when",
+   "params": {
+    "fn": "modify",
+    "forbidden": "sender != pre(\"orders\", arg(0), \"maker\") or pre(\"orders\", arg(0), \"active\") == 0 or arg(1) == 0 or arg(2) == 0"
+   },
+   "expr": "",
+   "why": "only maker modifies an active order"
+  },
+  {
+   "name": "modify_fields",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"modify\") and (post(\"orders\", arg(0), \"amount\") != arg(1) or post(\"orders\", arg(0), \"price\") != arg(2) or post(\"orders\", arg(0), \"maker\") != pre(\"orders\", arg(0), \"maker\"))",
+   "why": "modify sets new amount and price"
+  },
+  {
+   "name": "modify_escrow",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"modify\") and post(\"TokenC07_BASE.balanceOf\", A0) + pre(\"orders\", arg(0), \"amount\") != pre(\"TokenC07_BASE.balanceOf\", A0) + arg(1)",
+   "why": "escrow tracks the new amount"
+  },
+  {
+   "name": "inactive_frozen",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"fill\") or called(\"cancel\") or called(\"modify\")) and pre(\"orders\", arg(0), \"active\") == 0 and pre(\"orders\", arg(0), \"maker\") != 0 and post(\"orders\", arg(0), \"active\") != 0",
+   "why": "a closed order can never reopen or release funds"
+  },
+  {
+   "name": "cancelled_no_refund_again",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"cancel\") or called(\"modify\")) and pre(\"orders\", arg(0), \"active\") == 0",
+   "why": "no refund paths on closed orders"
+  },
+  {
+   "name": "active_nonempty",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"fill\") or called(\"cancel\") or called(\"modify\")) and post(\"orders\", arg(0), \"active\") != 0 and post(\"orders\", arg(0), \"amount\") == 0",
+   "why": "active orders have amount"
+  },
+  {
+   "name": "base_third_party",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"place\") or called(\"fill\") or called(\"cancel\") or called(\"modify\")) and u != sender and u != A0 and post(\"TokenC07_BASE.balanceOf\", u) < pre(\"TokenC07_BASE.balanceOf\", u)",
+   "why": "no one loses BASE in others' calls"
+  },
+  {
+   "name": "quote_third_party",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"place\") or called(\"fill\") or called(\"cancel\") or called(\"modify\")) and u != sender and post(\"TokenC07_QUOTE.balanceOf\", u) < pre(\"TokenC07_QUOTE.balanceOf\", u)",
+   "why": "no one loses QUOTE in others' calls"
+  },
+  {
+   "name": "quote_never_held",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and post(\"TokenC07_QUOTE.balanceOf\", A0) != pre(\"TokenC07_QUOTE.balanceOf\", A0)",
+   "why": "book never holds quote"
+  },
+  {
+   "name": "maker_immutable",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"fill\") or called(\"cancel\") or called(\"modify\")) and pre(\"orders\", arg(0), \"maker\") != 0 and post(\"orders\", arg(0), \"maker\") != pre(\"orders\", arg(0), \"maker\")",
+   "why": "maker never changes"
+  },
+  {
+   "name": "cancel_works",
+   "family": "must_succeed",
+   "params": {
+    "fn": "cancel",
+    "condition": "sender == pre(\"orders\", arg(0), \"maker\") and pre(\"orders\", arg(0), \"active\") != 0 and pre(\"orders\", arg(0), \"amount\") <= pre(\"TokenC07_BASE.balanceOf\", A0)"
+   },
+   "expr": "",
+   "why": "maker can always cancel active order"
+  }
+ ],
+ "invariants": []
+}

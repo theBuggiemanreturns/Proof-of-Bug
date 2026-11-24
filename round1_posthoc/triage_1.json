@@ -1,0 +1,74 @@
+{
+ "triage": [
+  {
+   "case": "C01",
+   "n": 1,
+   "rule": "transfer_exact",
+   "verdict": "rule_wrong",
+   "why": "My rule used arg(0) (the recipient) as the amount instead of arg(1); a zero-amount transfer is correct behaviour."
+  },
+  {
+   "case": "C01",
+   "n": 2,
+   "rule": "deposit_nonzero",
+   "verdict": "real_bug",
+   "why": "After assets are pushed into the vault (redeem to receiver=vault), a 1-wei deposit is accepted and mints 0 shares, so the depositor silently loses funds; deposit lacks a shares>0 check."
+  },
+  {
+   "case": "C03",
+   "n": 3,
+   "rule": "ledger",
+   "verdict": "real_bug",
+   "why": "withdrawAll sends ETH before zeroing the balance and transfer is not nonReentrant, so the callback moves the balance elsewhere and it is then counted twice, breaking sum(balanceOf)==totalDeposits."
+  },
+  {
+   "case": "C03",
+   "n": 4,
+   "rule": "sum_backed",
+   "verdict": "real_bug",
+   "why": "Same reentrancy in withdrawAll: balances transferred during the callback survive, leaving credited balances unbacked by ETH."
+  },
+  {
+   "case": "C03",
+   "n": 5,
+   "rule": "exit_all",
+   "verdict": "real_bug",
+   "why": "Because of the withdrawAll reentrancy, totalDeposits is lower than the credited balances, so an honest holder's withdrawAll underflows and their funds are stuck."
+  },
+  {
+   "case": "C03",
+   "n": 6,
+   "rule": "exit_amount",
+   "verdict": "real_bug",
+   "why": "Same desync: totalDeposits underflows and an honest holder cannot withdraw a balance they legitimately hold."
+  },
+  {
+   "case": "C07",
+   "n": 7,
+   "rule": "modify_auth",
+   "verdict": "real_bug",
+   "why": "modify works on a cancelled order whose amount was not zeroed, so the maker can extract base again (double refund / reopening a closed order)."
+  },
+  {
+   "case": "C07",
+   "n": 8,
+   "rule": "cancelled_no_refund_again",
+   "verdict": "real_bug",
+   "why": "Same missing active check in modify: a cancelled order can be modified and moves escrowed base again."
+  },
+  {
+   "case": "C07",
+   "n": 9,
+   "rule": "quote_never_held",
+   "verdict": "rule_wrong",
+   "why": "Anyone can send QUOTE straight to the book with a token transfer; that is an outside donation, not contract behaviour."
+  },
+  {
+   "case": "C09",
+   "n": 10,
+   "rule": "deposit_works",
+   "verdict": "rule_wrong",
+   "why": "The depositor first set its allowance to the vault to 0, so the revert is expected; my condition left out the allowance requirement."
+  }
+ ]
+}

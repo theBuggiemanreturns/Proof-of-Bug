@@ -1,0 +1,143 @@
+{
+ "rules": [
+  {
+   "name": "ledger",
+   "family": "ledger",
+   "params": {
+    "accounts": "balanceOf",
+    "total": "totalSupply"
+   },
+   "expr": "",
+   "why": "lp sums to supply"
+  },
+  {
+   "name": "no_third_party",
+   "family": "no_third_party_loss",
+   "params": {
+    "balance": "balanceOf"
+   },
+   "expr": "",
+   "why": "no one loses lp in others' calls"
+  },
+  {
+   "name": "deposit_fair",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"deposit\") and pre(\"totalSupply\") > 0 and wide(post(\"totalSupply\") - pre(\"totalSupply\")) * wide(pre(\"MockToken.balanceOf\", A0)) > wide(post(\"MockToken.balanceOf\", A0) - pre(\"MockToken.balanceOf\", A0)) * wide(pre(\"totalSupply\"))",
+   "why": "lp minted never exceeds the tokens actually pulled (no rounding in depositor's favour)"
+  },
+  {
+   "name": "deposit_pulls_something",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"deposit\") and post(\"MockToken.balanceOf\", A0) <= pre(\"MockToken.balanceOf\", A0)",
+   "why": "a deposit that pulls nothing must fail"
+  },
+  {
+   "name": "deposit_pull_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"deposit\") and wide(post(\"MockToken.balanceOf\", A0) - pre(\"MockToken.balanceOf\", A0)) * 1000000000000 < arg(0) - 999999999999",
+   "why": "pulled tokens match amount18 up to scale rounding"
+  },
+  {
+   "name": "deposit_mint_sync",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"deposit\") and post(\"totalSupply\") - pre(\"totalSupply\") != post(\"balanceOf\", sender) - pre(\"balanceOf\", sender)",
+   "why": "minted lp goes to depositor"
+  },
+  {
+   "name": "share_price_monotone",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and pre(\"totalSupply\") > 0 and post(\"totalSupply\") > 0 and wide(post(\"MockToken.balanceOf\", A0)) * wide(pre(\"totalSupply\")) < wide(pre(\"MockToken.balanceOf\", A0)) * wide(post(\"totalSupply\"))",
+   "why": "assets per lp never drop"
+  },
+  {
+   "name": "withdraw_fair",
+   "family": "fair_redemption",
+   "params": {
+    "fn": "withdraw",
+    "shares_arg": "0",
+    "assets": "MockToken.balanceOf",
+    "shares": "totalSupply"
+   },
+   "expr": "",
+   "why": "fair redemption"
+  },
+  {
+   "name": "withdraw_fair_custom",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and wide(pre(\"MockToken.balanceOf\", A0) - post(\"MockToken.balanceOf\", A0)) * wide(pre(\"totalSupply\")) > wide(arg(0)) * wide(pre(\"MockToken.balanceOf\", A0))",
+   "why": "pays at most fraction"
+  },
+  {
+   "name": "withdraw_burn",
+   "family": "exact_decrease",
+   "params": {
+    "fn": "withdraw",
+    "value": "post(\"balanceOf\", sender)",
+    "before": "pre(\"balanceOf\", sender)",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "burns exactly lp"
+  },
+  {
+   "name": "transfer_bound",
+   "family": "never_when",
+   "params": {
+    "fn": "transfer",
+    "forbidden": "arg(1) > pre(\"balanceOf\", sender)"
+   },
+   "expr": "",
+   "why": "cannot send more than balance"
+  },
+  {
+   "name": "transfer_conserves",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"transfer\") and (post_sum(\"balanceOf\") != pre_sum(\"balanceOf\") or post(\"totalSupply\") != pre(\"totalSupply\"))",
+   "why": "transfer conserves lp"
+  },
+  {
+   "name": "assets_out_only_withdraw",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and post(\"MockToken.balanceOf\", A0) < pre(\"MockToken.balanceOf\", A0) and not called(\"withdraw\")",
+   "why": "assets leave only via withdraw"
+  },
+  {
+   "name": "withdraw_exit",
+   "family": "exit_amount",
+   "params": {
+    "fn": "withdraw",
+    "amount_arg": "0",
+    "balance": "balanceOf"
+   },
+   "expr": "",
+   "why": "holders can exit"
+  },
+  {
+   "name": "no_third_party_token_loss",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and u != A0 and post(\"MockToken.balanceOf\", u) < pre(\"MockToken.balanceOf\", u)",
+   "why": "no token loss for others"
+  }
+ ],
+ "invariants": [
+  {
+   "name": "supply_eq_sum",
+   "expr": "post(\"totalSupply\") != post_sum(\"balanceOf\")",
+   "why": "supply equals sum"
+  },
+  {
+   "name": "backed",
+   "expr": "post(\"totalSupply\") > 0 and post(\"MockToken.balanceOf\", A0) == 0",
+   "why": "lp backed"
+  }
+ ]
+}

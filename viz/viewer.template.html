@@ -1,0 +1,373 @@
+<title>GateGuard Circuit Viewer</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap">
+<style>
+/* Layout: a schematic sheet. One narrow reading column, with wide drawing panels that scroll sideways inside themselves. */
+:root {
+  --paper: #f2f4f7;
+  --sheet: #ffffff;
+  --ink: #16202e;
+  --muted: #5b6676;
+  --line: #d6dce4;
+  --on: #c2611f;        /* a wire carrying 1: copper */
+  --off: #a6b0bd;       /* a wire carrying 0 */
+  --bug: #c8282d;
+  --ok: #2c7a55;
+  --r1: #3d78b0;  --r2: #7b59a8;  --r3: #2a8a6c;
+  --display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #0f151e; --sheet: #161e2a; --ink: #e4e9f0; --muted: #96a2b3; --line: #273345;
+  --on: #f0893b; --off: #4a5769; --bug: #ff5c60; --ok: #4cc28a;
+  --r1: #6aa5de; --r2: #a88be0; --r3: #4fc29d; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --paper: #0f151e; --sheet: #161e2a; --ink: #e4e9f0; --muted: #96a2b3; --line: #273345;
+  --on: #f0893b; --off: #4a5769; --bug: #ff5c60; --ok: #4cc28a;
+  --r1: #6aa5de; --r2: #a88be0; --r3: #4fc29d; color-scheme: dark }
+
+body { background: var(--paper); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.55; }
+.wrap { max-width: 1080px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 32px 64px; display: grid; gap: 40px; }
+header { display: grid; gap: 10px; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+h1 { font-family: var(--display); font-weight: 600; font-size: clamp(28px, 5vw, 40px); line-height: 1.1; margin: 0; text-wrap: balance; }
+h2 { font-family: var(--display); font-weight: 600; font-size: 22px; margin: 0; text-wrap: balance; }
+p { margin: 0; max-width: 68ch; }
+.lede { color: var(--muted); font-size: 16px; }
+section { display: grid; gap: 16px; }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 18px; height: 3px; border-radius: 2px; display: inline-block; }
+.dot { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+/* attack strip */
+.txs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 720px) { .txs { grid-template-columns: 1fr; } }
+.tx { background: var(--sheet); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; display: grid; gap: 8px; min-width: 0; }
+.tx.bad { border-color: var(--bug); box-shadow: inset 4px 0 0 var(--bug); }
+.tx .call { font-family: var(--mono); font-size: 16px; font-weight: 500; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 13px; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+.pill { justify-self: start; font-family: var(--mono); font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.pill.bad { border-color: var(--bug); color: var(--bug); font-weight: 500; }
+
+/* panels */
+.panel { background: var(--sheet); border: 1px solid var(--line); border-radius: 6px; display: grid; min-width: 0; }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { font: inherit; font-size: 13px; padding: 6px 12px; background: transparent; color: var(--ink); border: 0; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--sheet); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--on); outline-offset: 2px; }
+.field { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.field input[type=number] { width: 72px; font-family: var(--mono); font-size: 14px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); color: var(--ink); }
+.bits { display: inline-flex; gap: 2px; }
+.bit { font-family: var(--mono); font-size: 12px; width: 20px; height: 24px; border: 1px solid var(--line); border-radius: 3px; background: var(--paper); color: var(--muted); cursor: pointer; padding: 0; }
+.bit[data-v="1"] { background: var(--on); border-color: var(--on); color: var(--sheet); }
+.lamp { display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 14px; padding: 4px 10px; border-radius: 4px; border: 1px solid var(--line); }
+.lamp[data-v="1"].alarm { border-color: var(--bug); color: var(--bug); font-weight: 500; }
+.lamp[data-v="1"]:not(.alarm) { border-color: var(--on); color: var(--on); }
+.scroll { overflow-x: auto; }
+.note { padding: 12px 16px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+svg text { font-family: var(--mono); font-size: 11px; fill: var(--muted); }
+.stats { display: flex; flex-wrap: wrap; gap: 8px 28px; font-size: 13px; color: var(--muted); }
+.stats b { font-family: var(--mono); font-weight: 500; color: var(--ink); font-size: 15px; }
+#tip { position: fixed; pointer-events: none; background: var(--ink); color: var(--sheet); font-family: var(--mono); font-size: 12px; padding: 6px 8px; border-radius: 4px; white-space: nowrap; z-index: 5; }
+canvas { display: block; }
+@media (prefers-reduced-motion: no-preference) { svg path.w { transition: stroke .15s; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">GateGuard · Vault B01 · donation bug</div>
+    <h1>Watching a smart-contract bug inside logic gates</h1>
+    <p class="lede">This is the real circuit the solver searched: a small vault contract compiled to NAND gates. The solver found the attack below without being told what to look for, and the real Solidity contract loses the funds in the same way.</p>
+  </header>
+
+  <section aria-labelledby="h-attack">
+    <h2 id="h-attack">1. The attack the solver found</h2>
+    <p>Three transactions on an empty vault. Someone donates tokens first, so the vault's books are lopsided. The second depositor gets shares at a bargain, and the third depositor pays 16 tokens and receives nothing.</p>
+    <div class="txs" id="txs"></div>
+  </section>
+
+  <section aria-labelledby="h-gates">
+    <h2 id="h-gates">2. One piece, gate by gate</h2>
+    <p>Each shape is a gate. Copper wires carry 1, grey wires carry 0. Change the numbers or click a bit and watch the signal move through. The bug detector is the rule "someone deposited more than 0 and got 0 shares", built only from NAND gates. It starts with the values from transaction 3.</p>
+    <div class="panel">
+      <div class="controls">
+        <div class="seg" role="group" aria-label="Circuit">
+          <button type="button" id="pick-zero" aria-pressed="true">Bug detector</button>
+          <button type="button" id="pick-adder" aria-pressed="false">1-bit full adder</button>
+        </div>
+        <div id="inputs" style="display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center"></div>
+        <div id="outputs" style="display:flex;gap:10px;margin-left:auto"></div>
+      </div>
+      <div class="scroll"><svg id="schem" role="img" aria-label="Gate-level schematic"></svg></div>
+      <div class="note" id="small-note"></div>
+    </div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--on)"></i>wire = 1</span>
+      <span><i class="sw" style="background:var(--off)"></i>wire = 0</span>
+      <span>NAND: D shape with a bubble</span>
+      <span>NOT: triangle; on TapeOut it is a NAND with both inputs joined</span>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-whole">
+    <h2 id="h-whole">3. The whole vault circuit</h2>
+    <p>All the gates the solver searched, with the attack running through them. Signals flow left to right; each column is one gate delay. Bright gates output 1, faded gates output 0. Most gates belong to transaction 3 because its bug check depends on everything that happened before.</p>
+    <div class="stats" id="stats"></div>
+    <div class="panel">
+      <div class="controls">
+        <div class="seg" role="group" aria-label="Wires">
+          <button type="button" id="w-on" aria-pressed="true">Show wires</button>
+          <button type="button" id="w-off" aria-pressed="false">Gates only</button>
+        </div>
+        <div class="legend" id="regions"></div>
+      </div>
+      <div class="scroll"><canvas id="big" aria-label="All gates of the vault circuit"></canvas></div>
+      <div class="note">Hover a gate to see its column and value. The final gate on the right is the <span class="mono">bug</span> output, and it reads 1 for this attack.</div>
+    </div>
+  </section>
+</div>
+<div id="tip" hidden></div>
+
+<script type="application/json" id="data">__DATA__</script>
+<script>
+const D = JSON.parse(document.getElementById('data').textContent);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const $ = id => document.getElementById(id);
+
+/* ---------- 1. attack strip ---------- */
+(function () {
+  const names = ['deposit', 'donate'];
+  $('txs').innerHTML = D.vault.steps.map((s, i) => {
+    const bad = s.zero_mint === 1;
+    const after = { ta: s.ta + s.amt, ts: s.ts + s.shares };
+    return `<article class="tx${bad ? ' bad' : ''}">
+      <div class="eyebrow">Transaction ${i + 1}</div>
+      <div class="call">${names[s.op]}(${s.amt})</div>
+      <dl class="kv">
+        <dt>vault assets</dt><dd>${s.ta} → ${after.ta}</dd>
+        <dt>total shares</dt><dd>${s.ts} → ${after.ts}</dd>
+        <dt>shares received</dt><dd>${s.op ? 'none (donation)' : s.shares}</dd>
+      </dl>
+      <span class="pill${bad ? ' bad' : ''}">${bad ? 'bug = 1 · paid 16, got 0' : 'ok'}</span>
+    </article>`;
+  }).join('');
+})();
+
+/* ---------- 2. small schematic ---------- */
+const small = { cur: 'zero_mint', vals: {} };
+const presets = { zero_mint: { amt: 16, shares: 0 }, full_adder: { a: 1, b: 1, cin: 0 } };
+const outLabel = { bug: 'bug', sum: 'sum', cout: 'carry out' };
+const notes = {
+  zero_mint: 'The left side checks "is any bit of amt a 1?" and the right side checks "are all bits of shares 0?". The last gates combine both answers. Gates in this circuit: ',
+  full_adder: 'A full adder adds three bits. Chained 8 times it adds two 8-bit numbers, which is how the vault adds deposits to its balance. Gates in this circuit: '
+};
+
+function layout(c) {
+  const depth = new Map(), pos = new Map();
+  c.inputs.forEach(p => p.bits.forEach(w => depth.set(w, 0)));
+  depth.set(0, 0); depth.set(1, 0);
+  let row = 0; c.inputs.forEach(p => p.bits.forEach(w => pos.set(w, row++)));
+  const layers = [];
+  c.gates.forEach((g, gi) => {
+    const d = 1 + Math.max(depth.get(g[1]) ?? 0, depth.get(g[2]) ?? 0);
+    depth.set(g[3], d); (layers[d] ||= []).push(gi);
+  });
+  for (let d = 1; d < layers.length; d++) {
+    if (!layers[d]) continue;
+    const bc = gi => { const g = c.gates[gi]; return ((pos.get(g[1]) ?? 0) + (pos.get(g[2]) ?? 0)) / 2; };
+    layers[d].sort((a, b) => bc(a) - bc(b));
+    const n = layers[d].length, span = Math.max(row - 1, n - 1);
+    layers[d].forEach((gi, k) => {
+      const target = bc(gi); const even = n > 1 ? k * span / (n - 1) : target;
+      pos.set(c.gates[gi][3], (target + even) / 2);
+    });
+  }
+  return { depth, pos, layers, rows: Math.max(row, ...Array.from(layers, l => l ? l.length : 0)) };
+}
+
+function simulate(c, inVals) {
+  const v = new Uint8Array(c.nwires); v[1] = 1;
+  c.inputs.forEach(p => p.bits.forEach((w, k) => { v[w] = (inVals[p.name] >> k) & 1; }));
+  c.gates.forEach(g => { v[g[3]] = (g[0] === 0) ? 1 - (v[g[1]] & v[g[2]]) : 1 - v[g[1]]; });
+  return v;
+}
+
+function drawSmall() {
+  const c = D[small.cur], L = layout(c), v = simulate(c, small.vals);
+  const colW = 86, rowH = 30, x0 = 96, y0 = 24;
+  const X = d => x0 + d * colW, Y = r => y0 + r * rowH;
+  const maxD = L.layers.length - 1;
+  const W = X(maxD) + 130, H = Y(L.rows - 1) + 30;
+  const on = css('--on'), off = css('--off'), ink = css('--ink'), sheet = css('--sheet');
+  const srcPt = w => {
+    const d = L.depth.get(w) ?? 0, r = L.pos.get(w) ?? 0;
+    return d === 0 ? [X(0) + 6, Y(r)] : [X(d) + 20, Y(r)];
+  };
+  let wires = '', shapes = '', labels = '';
+  c.inputs.forEach(p => p.bits.forEach((w, k) => {
+    const r = L.pos.get(w);
+    const name = p.bits.length > 1 ? `${p.name}[${k}]` : p.name;
+    labels += `<text x="${X(0) - 6}" y="${Y(r) + 4}" text-anchor="end">${name}</text>`;
+    shapes += `<circle cx="${X(0) + 2}" cy="${Y(r)}" r="5" fill="${v[w] ? on : sheet}" stroke="${v[w] ? on : off}" stroke-width="1.5" data-in="${p.name}" data-bit="${k}" style="cursor:pointer"><title>${name} = ${v[w]} (click to flip)</title></circle>`;
+  }));
+  c.gates.forEach((g, gi) => {
+    const d = L.depth.get(g[3]), r = L.pos.get(g[3]), x = X(d), y = Y(r), val = v[g[3]];
+    const ins = g[0] === 0 ? [[g[1], -6], [g[2], 6]] : [[g[1], 0]];
+    ins.forEach(([w, dy]) => {
+      const [sx, sy] = srcPt(w), tx = x - 14, ty = y + dy;
+      const mid = (sx + tx) / 2;
+      wires += `<path class="w" d="M${sx},${sy} C${mid},${sy} ${mid},${ty} ${tx},${ty}" fill="none" stroke="${v[w] ? on : off}" stroke-width="${v[w] ? 2 : 1.3}"/>`;
+    });
+    const stroke = val ? on : ink;
+    if (g[0] === 0) {
+      shapes += `<path d="M${x - 14},${y - 11} h12 a11,11 0 0 1 0,22 h-12 z" fill="${sheet}" stroke="${stroke}" stroke-width="1.6"/><circle cx="${x + 13}" cy="${y}" r="3.2" fill="${sheet}" stroke="${stroke}" stroke-width="1.6"/>`;
+    } else {
+      shapes += `<path d="M${x - 14},${y - 10} L${x + 6},${y} L${x - 14},${y + 10} z" fill="${sheet}" stroke="${stroke}" stroke-width="1.6"/><circle cx="${x + 9.5}" cy="${y}" r="3.2" fill="${sheet}" stroke="${stroke}" stroke-width="1.6"/>`;
+    }
+  });
+  c.outputs.forEach(p => p.bits.forEach(w => {
+    const [sx, sy] = srcPt(w), ex = W - 70;
+    wires += `<path class="w" d="M${sx},${sy} H${ex}" fill="none" stroke="${v[w] ? on : off}" stroke-width="${v[w] ? 2 : 1.3}"/>`;
+    labels += `<text x="${ex + 6}" y="${sy + 4}">${outLabel[p.name] || p.name} = ${v[w]}</text>`;
+  }));
+  const svg = $('schem');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('width', W); svg.setAttribute('height', H);
+  svg.innerHTML = wires + shapes + labels;
+  $('small-note').textContent = notes[small.cur] + c.gates.length + '.';
+  $('outputs').innerHTML = c.outputs.map(p => {
+    const val = p.bits.reduce((a, w, k) => a | (v[w] << k), 0);
+    return `<span class="lamp${p.name === 'bug' ? ' alarm' : ''}" data-v="${val}">${outLabel[p.name] || p.name} = ${val}</span>`;
+  }).join('');
+  syncInputs();
+}
+
+function buildInputs() {
+  const c = D[small.cur];
+  $('inputs').innerHTML = c.inputs.map(p => {
+    const n = p.bits.length;
+    if (n === 1) return `<span class="field">${p.name} <span class="bits"><button type="button" class="bit" id="in-${p.name}-0" data-in="${p.name}" data-bit="0">0</button></span></span>`;
+    const bits = Array.from({ length: n }, (_, k) => n - 1 - k)
+      .map(k => `<button type="button" class="bit" id="in-${p.name}-${k}" data-in="${p.name}" data-bit="${k}" aria-label="${p.name} bit ${k}">0</button>`).join('');
+    return `<label class="field" for="num-${p.name}">${p.name}<input type="number" id="num-${p.name}" min="0" max="${(1 << n) - 1}" data-num="${p.name}"><span class="bits">${bits}</span></label>`;
+  }).join('');
+}
+function syncInputs() {
+  D[small.cur].inputs.forEach(p => {
+    const val = small.vals[p.name];
+    const num = $('num-' + p.name); if (num && document.activeElement !== num) num.value = val;
+    p.bits.forEach((_, k) => { const b = $(`in-${p.name}-${k}`); if (b) { const bit = (val >> k) & 1; b.dataset.v = bit; b.textContent = bit; } });
+  });
+}
+function flip(name, bit) { small.vals[name] ^= (1 << bit); drawSmall(); }
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-in]'); if (!t) return;
+  flip(t.dataset.in, +t.dataset.bit);
+});
+document.addEventListener('input', e => {
+  const name = e.target.dataset && e.target.dataset.num; if (!name) return;
+  const max = +e.target.max; let x = Math.round(+e.target.value);
+  if (!Number.isFinite(x)) return; x = Math.min(max, Math.max(0, x));
+  small.vals[name] = x; drawSmall();
+});
+function pick(which) {
+  small.cur = which; small.vals = { ...presets[which] };
+  $('pick-zero').setAttribute('aria-pressed', which === 'zero_mint');
+  $('pick-adder').setAttribute('aria-pressed', which === 'full_adder');
+  buildInputs(); drawSmall();
+}
+$('pick-zero').onclick = () => pick('zero_mint');
+$('pick-adder').onclick = () => pick('full_adder');
+
+/* ---------- 3. whole circuit ---------- */
+const big = { wires: true };
+(function prepBig() {
+  const G = D.vault.gates, E = D.vault.edges;
+  const layers = [];
+  G.forEach((g, i) => (layers[g[0]] ||= []).push(i));
+  const y = new Float32Array(G.length), srcs = Array.from(G, () => []);
+  E.forEach(([a, b]) => srcs[b].push(a));
+  let maxN = 0;
+  for (let d = 1; d < layers.length; d++) {
+    const L = layers[d]; if (!L) continue;
+    const bc = i => srcs[i].length ? srcs[i].reduce((s, a) => s + y[a], 0) / srcs[i].length : 0.5;
+    L.sort((a, b) => (G[a][1] - G[b][1]) || (bc(a) - bc(b)));
+    L.forEach((i, k) => { y[i] = (k + 0.5) / L.length; });
+    maxN = Math.max(maxN, L.length);
+  }
+  big.layers = layers; big.y = y; big.maxN = maxN; big.depth = layers.length - 1;
+  const counts = [0, 0, 0]; G.forEach(g => counts[g[1]]++);
+  big.counts = counts;
+  $('stats').innerHTML = [
+    ['NAND-equivalent gates', G.length.toLocaleString()],
+    ['gate delays, input to output', big.depth],
+    ['wires', E.length.toLocaleString()],
+    ['gates outputting 1 in this attack', G.filter(g => g[2]).length.toLocaleString()],
+    ['bug output', D.vault.out.bug]
+  ].map(([k, v]) => `<span><b>${v}</b> ${k}</span>`).join('');
+  const names = ['Transaction 1', 'Transaction 2', 'Transaction 3 + bug check'];
+  $('regions').innerHTML = names.map((n, i) => `<span><i class="dot" style="background:var(--r${i + 1})"></i>${n} · ${counts[i].toLocaleString()}</span>`).join('');
+})();
+
+function drawBig() {
+  const cv = $('big'), G = D.vault.gates, E = D.vault.edges;
+  const colW = 3, H = 380, padX = 14, padY = 14;
+  const W = padX * 2 + big.depth * colW;
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  const ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = css('--sheet'); ctx.fillRect(0, 0, W, H);
+  const X = i => padX + G[i][0] * colW, Y = i => padY + big.y[i] * (H - padY * 2);
+  big.X = X; big.Y = Y; big.W = W; big.H = H;
+  if (big.wires) {
+    const on = css('--on'), off = css('--off');
+    ctx.lineWidth = 0.6;
+    for (const lit of [0, 1]) {
+      ctx.strokeStyle = lit ? on : off; ctx.globalAlpha = lit ? 0.35 : 0.12;
+      ctx.beginPath();
+      E.forEach(([a, b]) => { if (G[a][2] === lit) { ctx.moveTo(X(a), Y(a)); ctx.lineTo(X(b), Y(b)); } });
+      ctx.stroke();
+    }
+  }
+  const reg = [css('--r1'), css('--r2'), css('--r3')];
+  G.forEach((g, i) => {
+    ctx.globalAlpha = g[2] ? 1 : 0.28; ctx.fillStyle = reg[g[1]];
+    ctx.fillRect(X(i) - 1.5, Y(i) - 1.5, 3, 3);
+  });
+  // the bug output gate
+  let last = 0; G.forEach((g, i) => { if (g[0] > G[last][0]) last = i; });
+  ctx.globalAlpha = 1; ctx.strokeStyle = css('--bug'); ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(X(last), Y(last), 7, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = css('--bug'); ctx.font = '500 11px ' + css('--mono');
+  ctx.textAlign = 'right'; ctx.fillText('bug = ' + D.vault.out.bug, X(last) - 10, Y(last) - 10);
+}
+$('w-on').onclick = () => { big.wires = true; $('w-on').setAttribute('aria-pressed', true); $('w-off').setAttribute('aria-pressed', false); drawBig(); };
+$('w-off').onclick = () => { big.wires = false; $('w-off').setAttribute('aria-pressed', true); $('w-on').setAttribute('aria-pressed', false); drawBig(); };
+$('big').addEventListener('mousemove', e => {
+  const r = e.currentTarget.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  const G = D.vault.gates; let best = -1, bd = 64;
+  const d0 = Math.round((mx - 14) / 3);
+  for (let d = d0 - 2; d <= d0 + 2; d++) (big.layers[d] || []).forEach(i => {
+    const dx = big.X(i) - mx, dy = big.Y(i) - my, dd = dx * dx + dy * dy;
+    if (dd < bd) { bd = dd; best = i; }
+  });
+  const tip = $('tip');
+  if (best < 0) { tip.hidden = true; return; }
+  const g = G[best];
+  tip.textContent = `gate #${best} · column ${g[0]} · transaction ${g[1] + 1} · outputs ${g[2]}`;
+  tip.style.left = (e.clientX + 12) + 'px'; tip.style.top = (e.clientY + 12) + 'px'; tip.hidden = false;
+});
+$('big').addEventListener('mouseleave', () => { $('tip').hidden = true; });
+
+function redrawAll() { drawSmall(); drawBig(); }
+pick('zero_mint'); drawBig();
+try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', redrawAll); } catch (e) {}
+new MutationObserver(redrawAll).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(drawBig);
+</script>

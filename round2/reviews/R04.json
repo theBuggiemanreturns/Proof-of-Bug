@@ -1,0 +1,32 @@
+{
+ "drop": [],
+ "fix": [],
+ "add": [
+  {
+   "name": "transfer_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"transfer\") and arg(0) != sender and (pre(\"balanceOf\", sender) - post(\"balanceOf\", sender) != arg(1) or post(\"balanceOf\", arg(0)) - pre(\"balanceOf\", arg(0)) != arg(1))",
+   "why": "transfer moves exactly amount from sender to recipient"
+  },
+  {
+   "name": "delegate_total_exact",
+   "family": "exact_effect",
+   "params": {
+    "fn": "delegate",
+    "value": "post(\"totalDelegated\")",
+    "before": "pre(\"totalDelegated\")",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "total delegated grows by exactly the delegated amount"
+  },
+  {
+   "name": "balance_no_wrap",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"delegate\") or called(\"transfer\")) and post(\"balanceOf\", sender) > pre(\"balanceOf\", sender)",
+   "why": "spending or delegating never increases the caller's spendable balance (catches unchecked underflow)"
+  }
+ ]
+}

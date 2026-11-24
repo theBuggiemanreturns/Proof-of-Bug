@@ -1,0 +1,26 @@
+{
+ "drop": [
+  {
+   "name": "reserves_backed0",
+   "why": "vacuous: it excludes transfer/transferFrom, the only token paths that reach sync, so it can never break and checks nothing; pair_product and pair_balance_only_swap cover the reserve integrity"
+  }
+ ],
+ "fix": [
+  {
+   "name": "burn_bounded_by_sell",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"transfer\") and wide(pre(\"totalSupply\") - post(\"totalSupply\")) * 10000 > wide(arg(1)) * wide(pre(\"sellBurnBps\"))",
+   "why": "correction to my batch-3 addition (transfer has no arg(2); transferFrom's arg(1) is an address): a transfer burns at most the sell-tax fraction of the amount moved"
+  }
+ ],
+ "add": [
+  {
+   "name": "burn_bounded_by_sell",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"transfer\") or called(\"transferFrom\")) and wide(pre(\"totalSupply\") - post(\"totalSupply\")) * 10000 > wide(arg(1) + arg(2)) * wide(pre(\"sellBurnBps\"))",
+   "why": "a transfer burns at most the sell-tax fraction of the amount moved (arg(1) for transfer; for transferFrom arg(1) is an address, so this is loose but sound)"
+  }
+ ]
+}

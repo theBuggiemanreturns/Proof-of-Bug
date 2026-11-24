@@ -1,0 +1,221 @@
+{
+ "rules": [
+  {
+   "name": "setMinFee_owner",
+   "family": "never_when",
+   "params": {
+    "fn": "setMinFee",
+    "forbidden": "sender != pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "only owner sets fee"
+  },
+  {
+   "name": "minFee_auth",
+   "family": "authorized_change",
+   "params": {
+    "value": "post(\"minFee\")",
+    "before": "pre(\"minFee\")",
+    "admin": "pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "fee protected"
+  },
+  {
+   "name": "owner_auth",
+   "family": "authorized_change",
+   "params": {
+    "value": "post(\"owner\")",
+    "before": "pre(\"owner\")",
+    "admin": "pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "owner protected"
+  },
+  {
+   "name": "collect_owner",
+   "family": "never_when",
+   "params": {
+    "fn": "collectFees",
+    "forbidden": "sender != pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "only owner collects"
+  },
+  {
+   "name": "withdraw_fee_floor",
+   "family": "never_when",
+   "params": {
+    "fn": "withdraw",
+    "forbidden": "arg(1) < pre(\"minFee\")"
+   },
+   "expr": "",
+   "why": "fee must meet minimum"
+  },
+  {
+   "name": "withdraw_debit_covers_quantity",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and pre(\"balanceOf\", sender) - post(\"balanceOf\", sender) < arg(0)",
+   "why": "user is debited at least the quantity paid out"
+  },
+  {
+   "name": "withdraw_debit_split",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and pre(\"balanceOf\", sender) - post(\"balanceOf\", sender) != arg(0) + post(\"feesAccrued\") - pre(\"feesAccrued\")",
+   "why": "debit is exactly quantity plus booked fee"
+  },
+  {
+   "name": "withdraw_pays_quantity",
+   "family": "exact_decrease",
+   "params": {
+    "fn": "withdraw",
+    "value": "post(\"MockToken.balanceOf\", A0)",
+    "before": "pre(\"MockToken.balanceOf\", A0)",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "bridge pays out exactly quantity"
+  },
+  {
+   "name": "withdraw_nonce",
+   "family": "exact_effect",
+   "params": {
+    "fn": "withdraw",
+    "value": "post(\"nonce\")",
+    "before": "pre(\"nonce\")",
+    "delta": "1"
+   },
+   "expr": "",
+   "why": "one nonce per request"
+  },
+  {
+   "name": "nonce_monotone",
+   "family": "monotone",
+   "params": {
+    "value": "post(\"nonce\")"
+   },
+   "expr": "",
+   "why": "nonces never reused"
+  },
+  {
+   "name": "lockIn_credit",
+   "family": "exact_effect",
+   "params": {
+    "fn": "lockIn",
+    "value": "post(\"balanceOf\", sender)",
+    "before": "pre(\"balanceOf\", sender)",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "lockIn credits amount"
+  },
+  {
+   "name": "lockIn_pull",
+   "family": "exact_effect",
+   "params": {
+    "fn": "lockIn",
+    "value": "post(\"MockToken.balanceOf\", A0)",
+    "before": "pre(\"MockToken.balanceOf\", A0)",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "lockIn takes amount"
+  },
+  {
+   "name": "lockIn_zero",
+   "family": "never_when",
+   "params": {
+    "fn": "lockIn",
+    "forbidden": "arg(0) == 0"
+   },
+   "expr": "",
+   "why": "nonzero amount"
+  },
+  {
+   "name": "collect_pays_fees",
+   "family": "exact_decrease",
+   "params": {
+    "fn": "collectFees",
+    "value": "post(\"MockToken.balanceOf\", A0)",
+    "before": "pre(\"MockToken.balanceOf\", A0)",
+    "delta": "pre(\"feesAccrued\")"
+   },
+   "expr": "",
+   "why": "collect pays exactly accrued fees"
+  },
+  {
+   "name": "collect_zeroes",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"collectFees\") and post(\"feesAccrued\") != 0",
+   "why": "fees reset"
+  },
+  {
+   "name": "collect_no_user_effect",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"collectFees\") and post_sum(\"balanceOf\") != pre_sum(\"balanceOf\")",
+   "why": "collecting fees leaves user balances"
+  },
+  {
+   "name": "backing_in_sync",
+   "family": "in_sync",
+   "params": {
+    "a": "post_sum(\"balanceOf\") + post(\"feesAccrued\")",
+    "b": "post(\"MockToken.balanceOf\", A0)"
+   },
+   "expr": "",
+   "why": "booked liabilities move with tokens held"
+  },
+  {
+   "name": "backing_bound",
+   "family": "bounded_by",
+   "params": {
+    "amount": "post_sum(\"balanceOf\") + post(\"feesAccrued\")",
+    "backing": "post(\"MockToken.balanceOf\", A0)"
+   },
+   "expr": "",
+   "why": "liabilities never exceed tokens held"
+  },
+  {
+   "name": "no_third_party",
+   "family": "no_third_party_loss",
+   "params": {
+    "balance": "balanceOf"
+   },
+   "expr": "",
+   "why": "no one loses bridge balance in others' calls"
+  },
+  {
+   "name": "no_third_party_token_loss",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and u != A0 and post(\"MockToken.balanceOf\", u) < pre(\"MockToken.balanceOf\", u)",
+   "why": "no token loss for others"
+  },
+  {
+   "name": "token_ledger",
+   "family": "ledger",
+   "params": {
+    "accounts": "MockToken.balanceOf",
+    "total": "MockToken.totalSupply"
+   },
+   "expr": "",
+   "why": "token conservation"
+  }
+ ],
+ "invariants": [
+  {
+   "name": "backed",
+   "expr": "post_sum(\"balanceOf\") + post(\"feesAccrued\") > post(\"MockToken.balanceOf\", A0)",
+   "why": "all liabilities backed"
+  },
+  {
+   "name": "user_backed",
+   "expr": "post(\"balanceOf\", u) > post(\"MockToken.balanceOf\", A0)",
+   "why": "no user balance exceeds holdings"
+  }
+ ]
+}

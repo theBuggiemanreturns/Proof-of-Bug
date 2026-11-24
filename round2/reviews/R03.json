@@ -1,0 +1,33 @@
+{
+ "drop": [
+  {
+   "name": "withdraw_fair",
+   "why": "duplicate of withdraw_fair_custom, and its 'assets' param is the bare mapping MockToken.balanceOf with no key (A0), so its meaning is ambiguous"
+  }
+ ],
+ "fix": [
+  {
+   "name": "withdraw_fair_custom",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and ((pre(\"totalLiquidity\") == 0 and post(\"MockToken.balanceOf\", A0) < pre(\"MockToken.balanceOf\", A0)) or wide(pre(\"MockToken.balanceOf\", A0) - post(\"MockToken.balanceOf\", A0)) * wide(pre(\"totalLiquidity\")) > wide(arg(0)) * wide(pre(\"MockToken.balanceOf\", A0)))",
+   "why": "withdraw pays at most liquidity/total of the pool; with zero total liquidity nobody holds a claim, so nothing may be paid (the old form evaluated 0 > 0 and missed this case)"
+  },
+  {
+   "name": "no_third_party_token_loss",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and u != A0 and not called(\"MockToken.transferFrom\") and post(\"MockToken.balanceOf\", u) < pre(\"MockToken.balanceOf\", u)",
+   "why": "nobody loses tokens in others' calls; direct MockToken.transferFrom by an approved spender is legitimate and excluded"
+  }
+ ],
+ "add": [
+  {
+   "name": "withdraw_payout_to_sender",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and sender != A0 and post(\"MockToken.balanceOf\", sender) - pre(\"MockToken.balanceOf\", sender) != pre(\"MockToken.balanceOf\", A0) - post(\"MockToken.balanceOf\", A0)",
+   "why": "whatever leaves the vault on withdraw goes to the caller"
+  }
+ ]
+}

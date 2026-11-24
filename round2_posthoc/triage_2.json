@@ -1,0 +1,25 @@
+{
+ "triage": [
+  {
+   "case": "R05",
+   "n": 29,
+   "rule": "withdraw_debit_covers_quantity",
+   "verdict": "real_bug",
+   "why": "With fee = -1379951932, withdraw debits only quantity + fee yet transfers the full quantity, so the user receives 1379951932 more tokens than they are debited; a negative fee should be rejected (and fee should be >= minFee)."
+  },
+  {
+   "case": "R05",
+   "n": 30,
+   "rule": "withdraw_debit_split",
+   "verdict": "real_bug",
+   "why": "Same negative-fee flaw: the debit is quantity minus the fee, feesAccrued does not move, so the balance drop does not equal quantity plus booked fee."
+  },
+  {
+   "case": "R05",
+   "n": 31,
+   "rule": "backing_bound",
+   "verdict": "real_bug",
+   "why": "The extra 1379951932 paid out comes from tokens backing other users' balances and fees, so liabilities now exceed the bridge's holdings: value taken from nothing."
+  }
+ ]
+}

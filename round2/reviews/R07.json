@@ -1,0 +1,21 @@
+{
+ "drop": [],
+ "fix": [
+  {
+   "name": "no_third_party_token_loss",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and u != A0 and not called(\"MockToken_A.transferFrom\") and not called(\"MockToken_B.transferFrom\") and (post(\"MockToken_A.balanceOf\", u) < pre(\"MockToken_A.balanceOf\", u) or post(\"MockToken_B.balanceOf\", u) < pre(\"MockToken_B.balanceOf\", u))",
+   "why": "no token loss for others; direct transferFrom on a token by an approved spender is legitimate and excluded"
+  }
+ ],
+ "add": [
+  {
+   "name": "withdraw_pays_sender",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and sender != A0 and (post(\"MockToken_A.balanceOf\", sender) - pre(\"MockToken_A.balanceOf\", sender) != pre(\"MockToken_A.balanceOf\", A0) - post(\"MockToken_A.balanceOf\", A0) or post(\"MockToken_B.balanceOf\", sender) - pre(\"MockToken_B.balanceOf\", sender) != pre(\"MockToken_B.balanceOf\", A0) - post(\"MockToken_B.balanceOf\", A0))",
+   "why": "what leaves the vault on withdraw goes to the caller"
+  }
+ ]
+}

@@ -1,0 +1,133 @@
+{
+ "rules": [
+  {
+   "name": "ledger",
+   "family": "ledger",
+   "params": {
+    "accounts": "balanceOf",
+    "total": "totalSupply"
+   },
+   "expr": "",
+   "why": "shares sum to supply"
+  },
+  {
+   "name": "no_third_party",
+   "family": "no_third_party_loss",
+   "params": {
+    "balance": "balanceOf"
+   },
+   "expr": "",
+   "why": "no one loses shares in others' calls"
+  },
+  {
+   "name": "deposit_fair",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"depositMulti\") and pre(\"totalSupply\") > 0 and wide(post(\"totalSupply\") - pre(\"totalSupply\")) * wide(pre(\"MockToken_A.balanceOf\", A0) + pre(\"MockToken_B.balanceOf\", A0)) > wide(post(\"MockToken_A.balanceOf\", A0) + post(\"MockToken_B.balanceOf\", A0) - pre(\"MockToken_A.balanceOf\", A0) - pre(\"MockToken_B.balanceOf\", A0)) * wide(pre(\"totalSupply\"))",
+   "why": "shares minted never exceed value brought in relative to total holdings"
+  },
+  {
+   "name": "deposit_mint_sync",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"depositMulti\") and post(\"totalSupply\") - pre(\"totalSupply\") != post(\"balanceOf\", sender) - pre(\"balanceOf\", sender)",
+   "why": "minted shares go to depositor"
+  },
+  {
+   "name": "deposit_brings_value",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"depositMulti\") and post(\"MockToken_A.balanceOf\", A0) + post(\"MockToken_B.balanceOf\", A0) <= pre(\"MockToken_A.balanceOf\", A0) + pre(\"MockToken_B.balanceOf\", A0)",
+   "why": "deposit always brings in tokens"
+  },
+  {
+   "name": "deposit_nonzero",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"depositMulti\") and post(\"totalSupply\") <= pre(\"totalSupply\")",
+   "why": "deposit always mints"
+  },
+  {
+   "name": "share_price_monotone",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and pre(\"totalSupply\") > 0 and post(\"totalSupply\") > 0 and wide(post(\"MockToken_A.balanceOf\", A0) + post(\"MockToken_B.balanceOf\", A0)) * wide(pre(\"totalSupply\")) < wide(pre(\"MockToken_A.balanceOf\", A0) + pre(\"MockToken_B.balanceOf\", A0)) * wide(post(\"totalSupply\"))",
+   "why": "holdings per share never drop"
+  },
+  {
+   "name": "withdraw_burn",
+   "family": "exact_decrease",
+   "params": {
+    "fn": "withdraw",
+    "value": "post(\"balanceOf\", sender)",
+    "before": "pre(\"balanceOf\", sender)",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "burns exactly shares"
+  },
+  {
+   "name": "withdraw_burn_total",
+   "family": "exact_decrease",
+   "params": {
+    "fn": "withdraw",
+    "value": "post(\"totalSupply\")",
+    "before": "pre(\"totalSupply\")",
+    "delta": "arg(0)"
+   },
+   "expr": "",
+   "why": "supply drops by shares"
+  },
+  {
+   "name": "withdraw_fair_A",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and wide(pre(\"MockToken_A.balanceOf\", A0) - post(\"MockToken_A.balanceOf\", A0)) * wide(pre(\"totalSupply\")) > wide(arg(0)) * wide(pre(\"MockToken_A.balanceOf\", A0))",
+   "why": "fair share of A"
+  },
+  {
+   "name": "withdraw_fair_B",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and wide(pre(\"MockToken_B.balanceOf\", A0) - post(\"MockToken_B.balanceOf\", A0)) * wide(pre(\"totalSupply\")) > wide(arg(0)) * wide(pre(\"MockToken_B.balanceOf\", A0))",
+   "why": "fair share of B"
+  },
+  {
+   "name": "assets_out_only_withdraw",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (post(\"MockToken_A.balanceOf\", A0) < pre(\"MockToken_A.balanceOf\", A0) or post(\"MockToken_B.balanceOf\", A0) < pre(\"MockToken_B.balanceOf\", A0)) and not called(\"withdraw\")",
+   "why": "assets leave only via withdraw"
+  },
+  {
+   "name": "no_third_party_token_loss",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and u != A0 and (post(\"MockToken_A.balanceOf\", u) < pre(\"MockToken_A.balanceOf\", u) or post(\"MockToken_B.balanceOf\", u) < pre(\"MockToken_B.balanceOf\", u))",
+   "why": "no token loss for others"
+  },
+  {
+   "name": "withdraw_exit",
+   "family": "exit_amount",
+   "params": {
+    "fn": "withdraw",
+    "amount_arg": "0",
+    "balance": "balanceOf"
+   },
+   "expr": "",
+   "why": "holders can exit"
+  }
+ ],
+ "invariants": [
+  {
+   "name": "supply_eq_sum",
+   "expr": "post(\"totalSupply\") != post_sum(\"balanceOf\")",
+   "why": "supply equals sum"
+  },
+  {
+   "name": "backed",
+   "expr": "post(\"totalSupply\") > 0 and post(\"MockToken_A.balanceOf\", A0) + post(\"MockToken_B.balanceOf\", A0) == 0",
+   "why": "shares backed"
+  }
+ ]
+}

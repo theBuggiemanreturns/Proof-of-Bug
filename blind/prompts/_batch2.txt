@@ -1,0 +1,700 @@
+BATCH 2 of 3: cases C06, C07, C08, C09. Reply with one JSON object keyed by these case ids (see your instructions).
+
+STANDARD TOKEN (every contract named TokenCnn / TokenCnn_XXX in these cases is exactly this code, renamed):
+```solidity
+contract TokenCxx {
+    string public name;
+    string public symbol;
+    uint8 public constant decimals = 18;
+    uint256 public totalSupply;
+    address public immutable minter;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+
+    constructor(string memory _name, string memory _symbol) {
+        name = _name;
+        symbol = _symbol;
+        minter = msg.sender;
+    }
+
+    function mint(address to, uint256 amount) external {
+        require(msg.sender == minter, "minter");
+        totalSupply += amount;
+        balanceOf[to] += amount;
+        emit Transfer(address(0), to, amount);
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        _transfer(msg.sender, to, amount);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        uint256 allowed = allowance[from][msg.sender];
+        if (allowed != type(uint256).max) {
+            require(allowed >= amount, "allowance");
+            allowance[from][msg.sender] = allowed - amount;
+        }
+        _transfer(from, to, amount);
+        return true;
+    }
+
+    function _transfer(address from, address to, uint256 amount) internal {
+        require(balanceOf[from] >= amount, "balance");
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        emit Transfer(from, to, amount);
+    }
+}
+```
+
+=================== CASE C06 ===================
+Contracts (the first is the one under test):
+### StakedShareC06
+storage: owner (address), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256))), accBonusPerShare (uint256), bonusDebt (mapping(address,uint256)), bonusOwed (mapping(address,uint256))
+functions: approve(address,uint256), claimBonus(), deposit(uint256), distribute(uint256), redeem(uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+```solidity
+contract StakedShareC06 {
+    string public constant name = "Staked BASE";
+    string public constant symbol = "sBASE";
+    uint8 public constant decimals = 18;
+    uint256 private constant ACC = 1e18;
+
+    TokenC06 public immutable asset;
+    TokenC06 public immutable bonus;
+    address public owner;
+
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    uint256 public accBonusPerShare;
+    mapping(address => uint256) public bonusDebt;
+    mapping(address => uint256) public bonusOwed;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+    event Deposit(address indexed account, uint256 assets, uint256 shares);
+    event Redeem(address indexed account, uint256 shares, uint256 assets);
+    event Distribute(uint256 amount);
+    event BonusClaimed(address indexed account, uint256 amount);
+
+    constructor(TokenC06 _asset, TokenC06 _bonus) {
+        asset = _asset;
+        bonus = _bonus;
+        owner = msg.sender;
+    }
+
+    function totalAssets() public view returns (uint256) {
+        return asset.balanceOf(address(this));
+    }
+
+    function pendingBonus(address account) public view returns (uint256) {
+        return bonusOwed[account] + (balanceOf[account] * accBonusPerShare) / ACC - bonusDebt[account];
+    }
+
+    function _accrue(address account) internal {
+        if (account == address(0)) return;
+        bonusOwed[account] = pendingBonus(account);
+    }
+
+    function _sync(address account) internal {
+        if (account == address(0)) return;
+        bonusDebt[account] = (balanceOf[account] * accBonusPerShare) / ACC;
+    }
+
+    function deposit(uint256 assets) external returns (uint256 shares) {
+        require(assets > 0, "zero");
+        uint256 supply = totalSupply;
+        uint256 managed = totalAssets();
+        shares = supply == 0 ? assets : (assets * supply) / managed;
+        require(shares > 0, "zero shares");
+        require(asset.transferFrom(msg.sender, address(this), assets), "transfer");
+        _accrue(msg.sender);
+        totalSupply = supply + shares;
+        balanceOf[msg.sender] += shares;
+        _sync(msg.sender);
+        emit Transfer(address(0), msg.sender, shares);
+        emit Deposit(msg.sender, assets, shares);
+    }
+
+    function redeem(uint256 shares) external returns (uint256 assets) {
+        require(shares > 0, "zero");
+        require(balanceOf[msg.sender] >= shares, "balance");
+        assets = (shares * totalAssets()) / totalSupply;
+        _accrue(msg.sender);
+        balanceOf[msg.sender] -= shares;
+        totalSupply -= shares;
+        _sync(msg.sender);
+        emit Transfer(msg.sender, address(0), shares);
+        emit Redeem(msg.sender, shares, assets);
+        require(asset.transfer(msg.sender, assets), "transfer");
+    }
+
+    function distribute(uint256 amount) external {
+        require(msg.sender == owner, "owner");
+        require(totalSupply > 0, "no stakers");
+        require(bonus.transferFrom(msg.sender, address(this), amount), "transfer");
+        accBonusPerShare += (amount * ACC) / totalSupply;
+        emit Distribute(amount);
+    }
+
+    function claimBonus() external returns (uint256 amount) {
+        _accrue(msg.sender);
+        amount = bonusOwed[msg.sender];
+        bonusOwed[msg.sender] = 0;
+        _sync(msg.sender);
+        if (amount > 0) {
+            require(bonus.transfer(msg.sender, amount), "transfer");
+            emit BonusClaimed(msg.sender, amount);
+        }
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        _transfer(msg.sender, to, amount);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        uint256 allowed = allowance[from][msg.sender];
+        if (allowed != type(uint256).max) {
+            require(allowed >= amount, "allowance");
+            allowance[from][msg.sender] = allowed - amount;
+        }
+        _transfer(from, to, amount);
+        return true;
+    }
+
+    function _transfer(address from, address to, uint256 amount) internal {
+        require(to != address(0), "zero address");
+        _accrue(from);
+        _accrue(to);
+        uint256 fromBalance = balanceOf[from];
+        uint256 toBalance = balanceOf[to];
+        require(fromBalance >= amount, "balance");
+        balanceOf[from] = fromBalance - amount;
+        balanceOf[to] = toBalance + amount;
+        _sync(from);
+        emit Transfer(from, to, amount);
+    }
+}
+```
+
+### TokenC06
+storage: name (string_storage), symbol (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+(source: the STANDARD TOKEN above, with this contract's name)
+
+### TokenC06
+storage: name (string_storage), symbol (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+(source: the STANDARD TOKEN above, with this contract's name)
+
+Deployment of this case (A0 is the contract under test):
+  A0 = StakedShareC06
+  A1 = TokenC06_BASE  (an instance of TokenC06; write its storage as "TokenC06_BASE.var")
+  A2 = TokenC06_BNS  (an instance of TokenC06; write its storage as "TokenC06_BNS.var")
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  Deployer / owner / minter: U2.
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    vm.prank(U2); TokenC06(A1).mint(U0, 100);
+    vm.prank(U2); TokenC06(A1).mint(U1, 100);
+    vm.prank(U2); TokenC06(A1).mint(U2, 100);
+    vm.prank(U2); TokenC06(A1).mint(U3, 100);
+    vm.prank(U0); TokenC06(A1).approve(A0, type(uint256).max);
+    vm.prank(U1); TokenC06(A1).approve(A0, type(uint256).max);
+    vm.prank(U2); TokenC06(A1).approve(A0, type(uint256).max);
+    vm.prank(U3); TokenC06(A1).approve(A0, type(uint256).max);
+    vm.prank(U2); TokenC06(A2).approve(A0, type(uint256).max);
+
+=================== CASE C07 ===================
+Contracts (the first is the one under test):
+### OrderBookC07
+storage: nextOrderId (uint256), orders (mapping(uint256,struct(Order)10_storage))
+functions: cancel(uint256), fill(uint256,uint128,uint256), modify(uint256,uint128,uint128), place(uint128,uint128)
+```solidity
+contract OrderBookC07 {
+    struct Order {
+        address maker;
+        uint128 amount;
+        uint128 price;
+        bool active;
+    }
+
+    uint256 public constant PRICE_SCALE = 1e18;
+
+    TokenC07 public immutable base;
+    TokenC07 public immutable quote;
+
+    uint256 public nextOrderId = 1;
+    mapping(uint256 => Order) public orders;
+
+    event Placed(uint256 indexed id, address indexed maker, uint256 amount, uint256 price);
+    event Filled(uint256 indexed id, address indexed taker, uint256 baseAmount, uint256 quoteAmount);
+    event Cancelled(uint256 indexed id, uint256 refunded);
+    event Modified(uint256 indexed id, uint256 newAmount, uint256 newPrice);
+
+    constructor(TokenC07 _base, TokenC07 _quote) {
+        base = _base;
+        quote = _quote;
+    }
+
+    function place(uint128 amount, uint128 price) external returns (uint256 id) {
+        require(amount > 0 && price > 0, "params");
+        require(base.transferFrom(msg.sender, address(this), amount), "transfer");
+        id = nextOrderId++;
+        orders[id] = Order({maker: msg.sender, amount: amount, price: price, active: true});
+        emit Placed(id, msg.sender, amount, price);
+    }
+
+    function quoteFor(uint256 id, uint256 baseAmount) public view returns (uint256) {
+        uint256 cost = baseAmount * orders[id].price;
+        return (cost + PRICE_SCALE - 1) / PRICE_SCALE;
+    }
+
+    function fill(uint256 id, uint128 baseAmount, uint256 maxQuote) external returns (uint256 quoteAmount) {
+        Order storage o = orders[id];
+        require(o.active, "inactive");
+        require(baseAmount > 0 && baseAmount <= o.amount, "amount");
+        quoteAmount = quoteFor(id, baseAmount);
+        require(quoteAmount <= maxQuote, "slippage");
+        o.amount -= baseAmount;
+        if (o.amount == 0) {
+            o.active = false;
+        }
+        require(quote.transferFrom(msg.sender, o.maker, quoteAmount), "quote transfer");
+        require(base.transfer(msg.sender, baseAmount), "base transfer");
+        emit Filled(id, msg.sender, baseAmount, quoteAmount);
+    }
+
+    function cancel(uint256 id) external {
+        Order storage o = orders[id];
+        require(o.maker == msg.sender, "maker");
+        require(o.active, "inactive");
+        o.active = false;
+        uint256 refund = o.amount;
+        require(base.transfer(msg.sender, refund), "transfer");
+        emit Cancelled(id, refund);
+    }
+
+    function modify(uint256 id, uint128 newAmount, uint128 newPrice) external {
+        Order storage o = orders[id];
+        require(o.maker == msg.sender, "maker");
+        require(newAmount > 0 && newPrice > 0, "params");
+        uint128 current = o.amount;
+        o.amount = newAmount;
+        o.price = newPrice;
+        if (newAmount > current) {
+            require(base.transferFrom(msg.sender, address(this), newAmount - current), "transfer");
+        } else if (newAmount < current) {
+            require(base.transfer(msg.sender, current - newAmount), "transfer");
+        }
+        emit Modified(id, newAmount, newPrice);
+    }
+}
+```
+
+### TokenC07
+storage: name (string_storage), symbol (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+(source: the STANDARD TOKEN above, with this contract's name)
+
+### TokenC07
+storage: name (string_storage), symbol (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+(source: the STANDARD TOKEN above, with this contract's name)
+
+Deployment of this case (A0 is the contract under test):
+  A0 = OrderBookC07
+  A1 = TokenC07_BASE  (an instance of TokenC07; write its storage as "TokenC07_BASE.var")
+  A2 = TokenC07_QUOTE  (an instance of TokenC07; write its storage as "TokenC07_QUOTE.var")
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    TokenC07(A1).mint(U0, 100);
+    TokenC07(A1).mint(U1, 100);
+    TokenC07(A1).mint(U2, 100);
+    TokenC07(A1).mint(U3, 100);
+    TokenC07(A2).mint(U0, 100);
+    TokenC07(A2).mint(U1, 100);
+    TokenC07(A2).mint(U2, 100);
+    TokenC07(A2).mint(U3, 100);
+    vm.prank(U0); TokenC07(A1).approve(A0, type(uint256).max);
+    vm.prank(U1); TokenC07(A1).approve(A0, type(uint256).max);
+    vm.prank(U2); TokenC07(A1).approve(A0, type(uint256).max);
+    vm.prank(U3); TokenC07(A1).approve(A0, type(uint256).max);
+    vm.prank(U0); TokenC07(A2).approve(A0, type(uint256).max);
+    vm.prank(U1); TokenC07(A2).approve(A0, type(uint256).max);
+    vm.prank(U2); TokenC07(A2).approve(A0, type(uint256).max);
+    vm.prank(U3); TokenC07(A2).approve(A0, type(uint256).max);
+
+=================== CASE C08 ===================
+Contracts (the first is the one under test):
+### PairC08
+storage: reserve0 (uint112), reserve1 (uint112), blockTimestampLast (uint32), totalSupply (uint256), balanceOf (mapping(address,uint256)), unlocked (uint256)
+functions: burn(address), mint(address), skim(address), swap(uint256,uint256,address), sync(), transfer(address,uint256)
+```solidity
+contract PairC08 {
+    uint256 public constant MINIMUM_LIQUIDITY = 1_000;
+    uint256 public constant FEE_BPS = 16;
+
+    TokenC08 public immutable token0;
+    TokenC08 public immutable token1;
+
+    uint112 private reserve0;
+    uint112 private reserve1;
+    uint32 private blockTimestampLast;
+
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+
+    uint256 private unlocked = 1;
+
+    event Mint(address indexed sender, uint256 amount0, uint256 amount1);
+    event Burn(address indexed sender, uint256 amount0, uint256 amount1, address indexed to);
+    event Swap(address indexed sender, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out, address indexed to);
+    event Sync(uint112 reserve0, uint112 reserve1);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
+    modifier lock() {
+        require(unlocked == 1, "LOCKED");
+        unlocked = 0;
+        _;
+        unlocked = 1;
+    }
+
+    constructor(TokenC08 _token0, TokenC08 _token1) {
+        token0 = _token0;
+        token1 = _token1;
+    }
+
+    function getReserves() public view returns (uint112 _reserve0, uint112 _reserve1, uint32 _blockTimestampLast) {
+        _reserve0 = reserve0;
+        _reserve1 = reserve1;
+        _blockTimestampLast = blockTimestampLast;
+    }
+
+    function _update(uint256 balance0, uint256 balance1) private {
+        require(balance0 <= type(uint112).max && balance1 <= type(uint112).max, "OVERFLOW");
+        reserve0 = uint112(balance0);
+        reserve1 = uint112(balance1);
+        blockTimestampLast = uint32(block.timestamp);
+        emit Sync(reserve0, reserve1);
+    }
+
+    function _mint(address to, uint256 value) private {
+        totalSupply += value;
+        balanceOf[to] += value;
+        emit Transfer(address(0), to, value);
+    }
+
+    function _burn(address from, uint256 value) private {
+        balanceOf[from] -= value;
+        totalSupply -= value;
+        emit Transfer(from, address(0), value);
+    }
+
+    function transfer(address to, uint256 value) external returns (bool) {
+        balanceOf[msg.sender] -= value;
+        balanceOf[to] += value;
+        emit Transfer(msg.sender, to, value);
+        return true;
+    }
+
+    function mint(address to) external lock returns (uint256 liquidity) {
+        (uint112 _reserve0, uint112 _reserve1, ) = getReserves();
+        uint256 balance0 = token0.balanceOf(address(this));
+        uint256 balance1 = token1.balanceOf(address(this));
+        uint256 amount0 = balance0 - _reserve0;
+        uint256 amount1 = balance1 - _reserve1;
+
+        uint256 _totalSupply = totalSupply;
+        if (_totalSupply == 0) {
+            liquidity = _sqrt(amount0 * amount1) - MINIMUM_LIQUIDITY;
+            _mint(address(0xdead), MINIMUM_LIQUIDITY);
+        } else {
+            uint256 l0 = (amount0 * _totalSupply) / _reserve0;
+            uint256 l1 = (amount1 * _totalSupply) / _reserve1;
+            liquidity = l0 < l1 ? l0 : l1;
+        }
+        require(liquidity > 0, "INSUFFICIENT_LIQUIDITY_MINTED");
+        _mint(to, liquidity);
+        _update(balance0, balance1);
+        emit Mint(msg.sender, amount0, amount1);
+    }
+
+    function burn(address to) external lock returns (uint256 amount0, uint256 amount1) {
+        uint256 balance0 = token0.balanceOf(address(this));
+        uint256 balance1 = token1.balanceOf(address(this));
+        uint256 liquidity = balanceOf[address(this)];
+        uint256 _totalSupply = totalSupply;
+        amount0 = (liquidity * balance0) / _totalSupply;
+        amount1 = (liquidity * balance1) / _totalSupply;
+        require(amount0 > 0 && amount1 > 0, "INSUFFICIENT_LIQUIDITY_BURNED");
+        _burn(address(this), liquidity);
+        require(token0.transfer(to, amount0), "T0");
+        require(token1.transfer(to, amount1), "T1");
+        _update(token0.balanceOf(address(this)), token1.balanceOf(address(this)));
+        emit Burn(msg.sender, amount0, amount1, to);
+    }
+
+    function swap(uint256 amount0Out, uint256 amount1Out, address to) external lock {
+        require(amount0Out > 0 || amount1Out > 0, "INSUFFICIENT_OUTPUT_AMOUNT");
+        (uint112 _reserve0, uint112 _reserve1, ) = getReserves();
+        require(amount0Out < _reserve0 && amount1Out < _reserve1, "INSUFFICIENT_LIQUIDITY");
+        require(to != address(token0) && to != address(token1), "INVALID_TO");
+
+        if (amount0Out > 0) require(token0.transfer(to, amount0Out), "T0");
+        if (amount1Out > 0) require(token1.transfer(to, amount1Out), "T1");
+
+        uint256 balance0 = token0.balanceOf(address(this));
+        uint256 balance1 = token1.balanceOf(address(this));
+        uint256 amount0In = balance0 > _reserve0 - amount0Out ? balance0 - (_reserve0 - amount0Out) : 0;
+        uint256 amount1In = balance1 > _reserve1 - amount1Out ? balance1 - (_reserve1 - amount1Out) : 0;
+        require(amount0In > 0 || amount1In > 0, "INSUFFICIENT_INPUT_AMOUNT");
+
+        uint256 balance0Adjusted = balance0 * 10_000 - amount0In * FEE_BPS;
+        uint256 balance1Adjusted = balance1 * 10_000 - amount1In * FEE_BPS;
+        require(balance0Adjusted * balance1Adjusted >= uint256(_reserve0) * _reserve1 * 1000 ** 2, "K");
+
+        _update(balance0, balance1);
+        emit Swap(msg.sender, amount0In, amount1In, amount0Out, amount1Out, to);
+    }
+
+    function skim(address to) external lock {
+        require(token0.transfer(to, token0.balanceOf(address(this)) - reserve0), "T0");
+        require(token1.transfer(to, token1.balanceOf(address(this)) - reserve1), "T1");
+    }
+
+    function sync() external lock {
+        _update(token0.balanceOf(address(this)), token1.balanceOf(address(this)));
+    }
+
+    function _sqrt(uint256 y) internal pure returns (uint256 z) {
+        if (y > 3) {
+            z = y;
+            uint256 x = y / 2 + 1;
+            while (x < z) {
+                z = x;
+                x = (y / x + x) / 2;
+            }
+        } else if (y != 0) {
+            z = 1;
+        }
+    }
+}
+```
+
+### TokenC08
+storage: name (string_storage), symbol (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+(source: the STANDARD TOKEN above, with this contract's name)
+
+### TokenC08
+storage: name (string_storage), symbol (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+(source: the STANDARD TOKEN above, with this contract's name)
+
+Deployment of this case (A0 is the contract under test):
+  A0 = PairC08
+  A1 = TokenC08_TKA  (an instance of TokenC08; write its storage as "TokenC08_TKA.var")
+  A2 = TokenC08_TKB  (an instance of TokenC08; write its storage as "TokenC08_TKB.var")
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Other addresses in play: 0xdead
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    TokenC08(A1).mint(U0, 1_000e18);
+    TokenC08(A2).mint(U0, 1_000e18);
+    vm.prank(U0); TokenC08(A1).transfer(A0, 1_000e18);
+    vm.prank(U0); TokenC08(A2).transfer(A0, 1_000e18);
+    vm.prank(U0); PairC08(A0).mint(U0);
+    TokenC08(A1).mint(U0, 100);
+    TokenC08(A1).mint(U1, 100);
+    TokenC08(A1).mint(U2, 100);
+    TokenC08(A1).mint(U3, 100);
+    TokenC08(A2).mint(U0, 100);
+    TokenC08(A2).mint(U1, 100);
+    TokenC08(A2).mint(U2, 100);
+    TokenC08(A2).mint(U3, 100);
+
+=================== CASE C09 ===================
+Contracts (the first is the one under test):
+### VaultC09
+storage: totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), deposit(uint256,address), mint(uint256,address), redeem(uint256,address,address), transfer(address,uint256), withdraw(uint256,address,address)
+```solidity
+contract VaultC09 {
+    uint256 public constant VIRTUAL_SHARES = 1e6;
+    uint256 public constant VIRTUAL_ASSETS = 1;
+    uint256 public constant EXIT_FEE_BPS = 10;
+    uint256 public constant BPS = 10_000;
+
+    TokenC09 public immutable asset;
+    address public immutable feeRecipient;
+
+    string public constant name = "WD Yield Share";
+    string public constant symbol = "yWD";
+    uint8 public constant decimals = 18;
+
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+    event Deposit(address indexed caller, address indexed receiver, uint256 assets, uint256 shares);
+    event Withdraw(address indexed caller, address indexed receiver, address indexed owner, uint256 assets, uint256 shares);
+
+    constructor(TokenC09 _asset, address _feeRecipient) {
+        require(_feeRecipient != address(0), "fee recipient");
+        asset = _asset;
+        feeRecipient = _feeRecipient;
+    }
+
+    function totalAssets() public view returns (uint256) {
+        return asset.balanceOf(address(this));
+    }
+
+    function _mulDiv(uint256 x, uint256 y, uint256 d, bool roundUp) internal pure returns (uint256 z) {
+        z = (x * y) / d;
+        if (roundUp && mulmod(x, y, d) != 0) z += 1;
+    }
+
+    function _toShares(uint256 assets, bool roundUp) internal view returns (uint256) {
+        return _mulDiv(assets, totalSupply + VIRTUAL_SHARES, totalAssets() + VIRTUAL_ASSETS, roundUp);
+    }
+
+    function _toAssets(uint256 shares, bool roundUp) internal view returns (uint256) {
+        return _mulDiv(shares, totalAssets() + VIRTUAL_ASSETS, totalSupply + VIRTUAL_SHARES, roundUp);
+    }
+
+    function convertToShares(uint256 assets) external view returns (uint256) {
+        return _toShares(assets, false);
+    }
+
+    function convertToAssets(uint256 shares) external view returns (uint256) {
+        return _toAssets(shares, false);
+    }
+
+    function previewDeposit(uint256 assets) public view returns (uint256) {
+        return _toShares(assets, false);
+    }
+
+    function previewMint(uint256 shares) public view returns (uint256) {
+        return _toAssets(shares, true);
+    }
+
+    function previewRedeem(uint256 shares) public view returns (uint256) {
+        uint256 gross = _toAssets(shares, false);
+        return gross - _mulDiv(gross, EXIT_FEE_BPS, BPS, true);
+    }
+
+    function previewWithdraw(uint256 assets) public view returns (uint256) {
+        uint256 gross = _mulDiv(assets, BPS, BPS - EXIT_FEE_BPS, true);
+        return _toShares(gross, true);
+    }
+
+    function deposit(uint256 assets, address receiver) external returns (uint256 shares) {
+        shares = previewDeposit(assets);
+        require(shares > 0, "zero shares");
+        _enter(receiver, assets, shares);
+    }
+
+    function mint(uint256 shares, address receiver) external returns (uint256 assets) {
+        require(shares > 0, "zero shares");
+        assets = previewMint(shares);
+        _enter(receiver, assets, shares);
+    }
+
+    function redeem(uint256 shares, address receiver, address owner) external returns (uint256 assets) {
+        assets = previewRedeem(shares);
+        require(assets > 0, "zero assets");
+        _exit(owner, receiver, assets, shares);
+    }
+
+    function withdraw(uint256 assets, address receiver, address owner) external returns (uint256 shares) {
+        require(assets > 0, "zero assets");
+        shares = previewWithdraw(assets);
+        _exit(owner, receiver, assets, shares);
+    }
+
+    function _enter(address receiver, uint256 assets, uint256 shares) internal {
+        require(asset.transferFrom(msg.sender, address(this), assets), "transfer");
+        totalSupply += shares;
+        balanceOf[receiver] += shares;
+        emit Transfer(address(0), receiver, shares);
+        emit Deposit(msg.sender, receiver, assets, shares);
+    }
+
+    function _exit(address owner, address receiver, uint256 assets, uint256 shares) internal {
+        if (msg.sender != owner) {
+            uint256 allowed = allowance[owner][msg.sender];
+            if (allowed != type(uint256).max) {
+                require(allowed >= shares, "allowance");
+                allowance[owner][msg.sender] = allowed - shares;
+            }
+        }
+        uint256 gross = _toAssets(shares, false);
+        uint256 fee = gross > assets ? gross - assets : 0;
+        require(balanceOf[owner] >= shares, "balance");
+        balanceOf[owner] -= shares;
+        totalSupply -= shares;
+        emit Transfer(owner, address(0), shares);
+        emit Withdraw(msg.sender, receiver, owner, assets, shares);
+        require(asset.transfer(receiver, assets), "transfer");
+        if (fee > 0) {
+            require(asset.transfer(feeRecipient, fee), "fee");
+        }
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        require(balanceOf[msg.sender] >= amount, "balance");
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        emit Transfer(msg.sender, to, amount);
+        return true;
+    }
+}
+```
+
+### TokenC09
+storage: name (string_storage), symbol (string_storage), totalSupply (uint256), balanceOf (mapping(address,uint256)), allowance (mapping(address,mapping(address,uint256)))
+functions: approve(address,uint256), mint(address,uint256), transfer(address,uint256), transferFrom(address,address,uint256)
+(source: the STANDARD TOKEN above, with this contract's name)
+
+Deployment of this case (A0 is the contract under test):
+  A0 = VaultC09
+  A1 = TokenC09
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Other addresses in play: 0xfee0
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    TokenC09(A1).mint(U0, 100);
+    TokenC09(A1).mint(U1, 100);
+    TokenC09(A1).mint(U2, 100);
+    TokenC09(A1).mint(U3, 100);
+    vm.prank(U0); TokenC09(A1).approve(A0, type(uint256).max);
+    vm.prank(U1); TokenC09(A1).approve(A0, type(uint256).max);
+    vm.prank(U2); TokenC09(A1).approve(A0, type(uint256).max);
+    vm.prank(U3); TokenC09(A1).approve(A0, type(uint256).max);

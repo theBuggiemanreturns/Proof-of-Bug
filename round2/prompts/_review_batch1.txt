@@ -1,0 +1,276 @@
+REVIEW BATCH 1 of 4: cases R01, R02, R03. Reply with one JSON object keyed by these case ids (see your instructions).
+
+===== CASE R01 =====
+Contracts (the first is the one under test):
+### VestingPool
+storage: totalShares (uint256), nextLockId (uint256), locks (mapping(uint256,struct(Lock)163_storage))
+functions: cancel(uint256), createLock(address,uint256,uint64), release(uint256)
+```solidity
+contract VestingPool {
+    struct Lock {
+        address creator;
+        address beneficiary;
+        uint256 sharesDeposited;
+        uint256 sharesWithdrawn;
+        uint256 shares;
+        uint64 start;
+        uint64 end;
+    }
+
+    MockToken public immutable token;
+    uint256 public totalShares;
+    uint256 public nextLockId;
+    mapping(uint256 => Lock) public locks;
+
+    event LockCreated(uint256 indexed id, address indexed creator, address indexed beneficiary, uint256 amount, uint256 shares);
+    event Released(uint256 indexed id, uint256 shares, uint256 amount);
+    event Cancelled(uint256 indexed id, uint256 toCreator, uint256 toBeneficiary);
+
+    constructor(MockToken _token) {
+        token = _token;
+    }
+
+    function createLock(address beneficiary, uint256 amount, uint64 duration) external returns (uint256 id) {
+        require(amount > 0 && duration > 0, "params");
+        require(beneficiary != address(0), "beneficiary");
+        uint256 balanceBefore = token.balanceOf(address(this));
+        token.transferFrom(msg.sender, address(this), amount);
+        uint256 shares = (totalShares == 0 || balanceBefore == 0) ? amount : amount * totalShares / balanceBefore;
+        require(shares > 0, "shares");
+
+        id = nextLockId++;
+        locks[id] = Lock({
+            creator: msg.sender,
+            beneficiary: beneficiary,
+            sharesDeposited: shares,
+            sharesWithdrawn: 0,
+            shares: shares,
+            start: uint64(block.timestamp),
+            end: uint64(block.timestamp) + duration
+        });
+        totalShares += shares;
+        emit LockCreated(id, msg.sender, beneficiary, amount, shares);
+    }
+
+    function vestedShares(uint256 id) public view returns (uint256) {
+        Lock storage l = locks[id];
+        if (block.timestamp >= l.end) return l.sharesDeposited;
+        if (block.timestamp <= l.start) return 0;
+        return l.sharesDeposited * (block.timestamp - l.start) / (l.end - l.start);
+    }
+
+    function sharesToTokens(uint256 shares) public view returns (uint256) {
+        if (totalShares == 0) return 0;
+        return shares * token.balanceOf(address(this)) / totalShares;
+    }
+
+    function release(uint256 id) external {
+        Lock storage l = locks[id];
+        require(msg.sender == l.beneficiary, "not beneficiary");
+        uint256 available = vestedShares(id) - l.sharesWithdrawn;
+        require(available > 0, "nothing vested");
+        uint256 amount = sharesToTokens(available);
+        l.sharesWithdrawn += available;
+        totalShares -= available;
+        token.transfer(l.beneficiary, amount);
+        emit Released(id, available, amount);
+    }
+
+    function cancel(uint256 id) external {
+        Lock storage l = locks[id];
+        require(msg.sender == l.creator, "not creator");
+        require(l.shares > 0, "closed");
+        uint256 vestedUnclaimed = vestedShares(id) - l.sharesWithdrawn;
+        uint256 unvested = l.shares - vestedUnclaimed;
+
+        uint256 toCreator = sharesToTokens(unvested);
+        uint256 toBeneficiary = sharesToTokens(vestedUnclaimed);
+        totalShares -= l.shares;
+        l.sharesWithdrawn = l.sharesDeposited;
+        l.shares = 0;
+
+        if (toCreator > 0) token.transfer(l.creator, toCreator);
+        if (toBeneficiary > 0) token.transfer(l.beneficiary, toBeneficiary);
+        emit Cancelled(id, toCreator, toBeneficiary);
+    }
+}
+```
+
+Deployment of this case (A0 is the contract under test):
+  A0 = VestingPool
+  A1 = MockToken
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    MockToken(A1).mint(U0, 100e18);
+    vm.prank(U0); MockToken(A1).approve(A0, 100e18);
+    MockToken(A1).mint(U1, 100e18);
+    vm.prank(U1); MockToken(A1).approve(A0, 100e18);
+    vm.prank(U0); VestingPool(A0).createLock(U0, 100e18, 100);
+
+RULES TO REVIEW:
+{"rules":[{"name":"release_only_beneficiary","family":"never_when","params":{"fn":"release","forbidden":"sender != pre(\"locks\", arg(0), \"beneficiary\")"},"expr":"","why":"only the beneficiary may release"},{"name":"cancel_only_creator","family":"never_when","params":{"fn":"cancel","forbidden":"sender != pre(\"locks\", arg(0), \"creator\")"},"expr":"","why":"only the creator may cancel"},{"name":"cancel_not_closed","family":"never_when","params":{"fn":"cancel","forbidden":"pre(\"locks\", arg(0), \"shares\") == 0"},"expr":"","why":"a closed lock cannot be cancelled again"},{"name":"create_bad_params","family":"never_when","params":{"fn":"createLock","forbidden":"arg(1) == 0 or arg(2) == 0 or arg(0) == 0"},"expr":"","why":"amount, duration and beneficiary must be nonzero"},{"name":"create_pulls_amount","family":"exact_effect","params":{"fn":"createLock","value":"post(\"MockToken.balanceOf\", A0)","before":"pre(\"MockToken.balanceOf\", A0)","delta":"arg(1)"},"expr":"","why":"createLock takes in exactly amount tokens"},{"name":"create_id_step","family":"exact_effect","params":{"fn":"createLock","value":"post(\"nextLockId\")","before":"pre(\"nextLockId\")","delta":"1"},"expr":"","why":"each lock gets a new id"},{"name":"nextLockId_monotone","family":"monotone","params":{"value":"post(\"nextLockId\")"},"expr":"","why":"ids never reused"},{"name":"totalShares_in_sync_locks","family":"in_sync","params":{"a":"post(\"totalShares\")","b":"post_sum(\"locks\", \"shares\")"},"expr":"","why":"total shares equals sum of open lock shares"},{"name":"create_shares_match_total","family":"custom","params":{},"expr":"ok and called(\"createLock\") and post(\"totalShares\") - pre(\"totalShares\") != post(\"locks\", pre(\"nextLockId\"), \"shares\")","why":"new lock shares are exactly what is added to totalShares"},{"name":"create_records_lock","family":"custom","params":{},"expr":"ok and called(\"createLock\") and (post(\"locks\", pre(\"nextLockId\"), \"beneficiary\") != arg(0) or post(\"locks\", pre(\"nextLockId\"), \"creator\") != sender or post(\"locks\", pre(\"nextLockId\"), \"sharesDeposited\") != post(\"locks\", pre(\"nextLockId\"), \"shares\") or post(\"locks\", pre(\"nextLockId\"), \"end\") != now + arg(2))","why":"lock stored as requested"},{"name":"share_price_monotone","family":"custom","params":{},"expr":"ok and pre(\"totalShares\") > 0 and post(\"totalShares\") > 0 and wide(post(\"MockToken.balanceOf\", A0)) * wide(pre(\"totalShares\")) < wide(pre(\"MockToken.balanceOf\", A0)) * wide(post(\"totalShares\"))","why":"tokens per share never drop for remaining holders (rounding favours pool)"},{"name":"release_fair","family":"custom","params":{},"expr":"ok and called(\"release\") and wide(pre(\"MockToken.balanceOf\", A0) - post(\"MockToken.balanceOf\", A0)) * wide(pre(\"totalShares\")) > wide(post(\"locks\", arg(0), \"sharesWithdrawn\") - pre(\"locks\", arg(0), \"sharesWithdrawn\")) * wide(pre(\"MockToken.balanceOf\", A0))","why":"release pays at most the released shares' fraction of the pool"},{"name":"release_shares_in_sync","family":"custom","params":{},"expr":"ok and called(\"release\") and pre(\"totalShares\") - post(\"totalShares\") != post(\"locks\", arg(0), \"sharesWithdrawn\") - pre(\"locks\", arg(0), \"sharesWithdrawn\")","why":"released shares leave totalShares exactly"},{"name":"release_updates_lock_shares","family":"custom","params":{},"expr":"ok and called(\"release\") and pre(\"locks\", arg(0), \"shares\") - post(\"locks\", arg(0), \"shares\") != post(\"locks\", arg(0), \"sharesWithdrawn\") - pre(\"locks\", arg(0), \"sharesWithdrawn\")","why":"remaining shares of the lock drop by what was released"},{"name":"release_vesting_bound","family":"custom","params":{},"expr":"ok and called(\"release\") and now < pre(\"locks\", arg(0), \"end\") and now > pre(\"locks\", arg(0), \"start\") and wide(post(\"locks\", arg(0), \"sharesWithdrawn\")) * wide(pre(\"locks\", arg(0), \"end\") - pre(\"locks\", arg(0), \"start\")) > wide(pre(\"locks\", arg(0), \"sharesDeposited\")) * wide(now - pre(\"locks\", arg(0), \"start\"))","why":"cannot withdraw more than vested by time"},{"name":"release_before_start_fails","family":"custom","params":{},"expr":"ok and called(\"release\") and now <= pre(\"locks\", arg(0), \"start\")","why":"nothing is vested at start"},{"name":"release_withdrawn_bounded","family":"custom","params":{},"expr":"ok and called(\"release\") and post(\"locks\", arg(0), \"sharesWithdrawn\") > pre(\"locks\", arg(0), \"sharesDeposited\")","why":"never withdraw more than deposited"},{"name":"cancel_shares_removed","family":"custom","params":{},"expr":"ok and called(\"cancel\") and pre(\"totalShares\") - post(\"totalShares\") != pre(\"locks\", arg(0), \"shares\")","why":"cancel removes exactly the lock's remaining shares"},{"name":"cancel_fair","family":"custom","params":{},"expr":"ok and called(\"cancel\") and wide(pre(\"MockToken.balanceOf\", A0) - post(\"MockToken.balanceOf\", A0)) * wide(pre(\"totalShares\")) > wide(pre(\"locks\", arg(0), \"shares\")) * wide(pre(\"MockToken.balanceOf\", A0))","why":"cancel pays out at most the lock's remaining fraction"},{"name":"cancel_closes","family":"custom","params":{},"expr":"ok and called(\"cancel\") and (post(\"locks\", arg(0), \"shares\") != 0 or post(\"locks\", arg(0), \"sharesWithdrawn\") != post(\"locks\", arg(0), \"sharesDeposited\"))","why":"cancel closes the lock"},{"name":"no_third_party_token_loss","family":"custom","params":{},"expr":"ok and u != sender and u != A0 and post(\"MockToken.balanceOf\", u) < pre(\"MockToken.balanceOf\", u)","why":"nobody loses tokens in a call they did not make"},{"name":"pool_tokens_only_via_release_cancel","family":"custom","params":{},"expr":"ok and post(\"MockToken.balanceOf\", A0) < pre(\"MockToken.balanceOf\", A0) and not called(\"release\") and not called(\"cancel\")","why":"pool tokens leave only through release/cancel"},{"name":"token_ledger","family":"ledger","params":{"accounts":"MockToken.balanceOf","total":"MockToken.totalSupply"},"expr":"","why":"token balances sum to supply"},{"name":"token_allowance_spent","family":"allowance_spent","params":{"fn":"MockToken.transferFrom","allowance":"MockToken.allowance","owner_arg":"0","amount_arg":"2"},"expr":"","why":"transferFrom consumes allowance"}],"invariants":[{"name":"totalShares_eq_sum","expr":"post(\"totalShares\") != post_sum(\"locks\", \"shares\")","why":"total equals sum of lock shares"},{"name":"lock_shares_consistent","expr":"post(\"locks\", u, \"shares\") + post(\"locks\", u, \"sharesWithdrawn\") != post(\"locks\", u, \"sharesDeposited\")","why":"remaining = deposited - withdrawn"},{"name":"withdrawn_le_deposited","expr":"post(\"locks\", u, \"sharesWithdrawn\") > post(\"locks\", u, \"sharesDeposited\")","why":"cannot withdraw more than deposited"},{"name":"shares_backed","expr":"post(\"totalShares\") > 0 and post(\"MockToken.balanceOf\", A0) == 0","why":"outstanding shares are backed by tokens"}]}
+
+===== CASE R02 =====
+Contracts (the first is the one under test):
+### TimeLockedSavings
+storage: nextId (uint256), totalLocked (uint256), deposits (mapping(uint256,struct(Deposit)8_storage))
+functions: deposit(uint64), extend(uint256,uint64), moveOwnership(uint256,address), topUp(uint256), withdraw(uint256)
+```solidity
+contract TimeLockedSavings {
+    struct Deposit {
+        address owner;
+        uint256 amount;
+        uint64 unlockAt;
+    }
+
+    uint64 public constant MIN_DELAY = 1 days;
+    uint64 public constant MAX_DELAY = 365 days;
+
+    uint256 public nextId;
+    uint256 public totalLocked;
+    mapping(uint256 => Deposit) public deposits;
+
+    event Deposited(uint256 indexed id, address indexed owner, uint256 amount, uint64 unlockAt);
+    event Extended(uint256 indexed id, uint64 unlockAt);
+    event OwnershipMoved(uint256 indexed id, address indexed from, address indexed to);
+    event Withdrawn(uint256 indexed id, address indexed to, uint256 amount);
+
+    function deposit(uint64 delay) external payable returns (uint256 id) {
+        require(msg.value > 0, "value");
+        require(delay >= MIN_DELAY && delay <= MAX_DELAY, "delay");
+        id = nextId++;
+        uint64 unlockAt = uint64(block.timestamp) + delay;
+        deposits[id] = Deposit({owner: msg.sender, amount: msg.value, unlockAt: unlockAt});
+        totalLocked += msg.value;
+        emit Deposited(id, msg.sender, msg.value, unlockAt);
+    }
+
+    function topUp(uint256 id) external payable {
+        Deposit storage d = deposits[id];
+        require(d.owner == msg.sender, "owner");
+        require(d.amount > 0, "closed");
+        require(msg.value > 0, "value");
+        d.amount += msg.value;
+        totalLocked += msg.value;
+    }
+
+    function extend(uint256 id, uint64 newUnlockAt) external {
+        Deposit storage d = deposits[id];
+        require(d.owner == msg.sender, "owner");
+        require(newUnlockAt > d.unlockAt, "earlier");
+        require(newUnlockAt <= uint64(block.timestamp) + MAX_DELAY, "too far");
+        d.unlockAt = newUnlockAt;
+        emit Extended(id, newUnlockAt);
+    }
+
+    function moveOwnership(uint256 id, address to) external {
+        Deposit storage d = deposits[id];
+        require(d.owner == msg.sender, "owner");
+        require(to != address(0), "zero");
+        d.owner = to;
+        emit OwnershipMoved(id, msg.sender, to);
+    }
+
+    function withdraw(uint256 id) external {
+        Deposit storage d = deposits[id];
+        require(d.owner == msg.sender, "owner");
+        require(block.timestamp >= d.unlockAt, "locked");
+        uint256 amount = d.amount;
+        require(amount > 0, "empty");
+        d.amount = 0;
+        totalLocked -= amount;
+        (bool ok, ) = msg.sender.call{value: amount}("");
+        require(ok, "send");
+        emit Withdrawn(id, msg.sender, amount);
+    }
+}
+```
+
+Deployment of this case (A0 is the contract under test):
+  A0 = TimeLockedSavings
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  U1 is a contract: when the contract under test calls it (e.g. sends it ETH) it may call back into the contract once per transaction, with any function and arguments.
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    vm.deal(U0, 5 ether);
+    vm.prank(U0); TimeLockedSavings(A0).deposit{value: 5 ether}(7 days);
+    vm.deal(U1, 5 ether);
+
+RULES TO REVIEW:
+{"rules":[{"name":"withdraw_locked","family":"never_when","params":{"fn":"withdraw","forbidden":"now < pre(\"deposits\", arg(0), \"unlockAt\")"},"expr":"","why":"no withdrawal before unlock"},{"name":"withdraw_only_owner","family":"never_when","params":{"fn":"withdraw","forbidden":"sender != pre(\"deposits\", arg(0), \"owner\")"},"expr":"","why":"only owner withdraws"},{"name":"withdraw_empty","family":"never_when","params":{"fn":"withdraw","forbidden":"pre(\"deposits\", arg(0), \"amount\") == 0"},"expr":"","why":"no double withdrawal"},{"name":"topUp_only_owner","family":"never_when","params":{"fn":"topUp","forbidden":"sender != pre(\"deposits\", arg(0), \"owner\")"},"expr":"","why":"only owner tops up"},{"name":"topUp_closed","family":"never_when","params":{"fn":"topUp","forbidden":"pre(\"deposits\", arg(0), \"amount\") == 0"},"expr":"","why":"closed deposits cannot be topped up"},{"name":"extend_only_owner","family":"never_when","params":{"fn":"extend","forbidden":"sender != pre(\"deposits\", arg(0), \"owner\")"},"expr":"","why":"only owner extends"},{"name":"extend_not_earlier","family":"never_when","params":{"fn":"extend","forbidden":"arg(1) <= pre(\"deposits\", arg(0), \"unlockAt\") or arg(1) > now + 31536000"},"expr":"","why":"extend only later, at most MAX_DELAY ahead"},{"name":"move_only_owner","family":"never_when","params":{"fn":"moveOwnership","forbidden":"sender != pre(\"deposits\", arg(0), \"owner\") or arg(1) == 0"},"expr":"","why":"only owner moves ownership, never to zero"},{"name":"deposit_delay_bounds","family":"never_when","params":{"fn":"deposit","forbidden":"arg(0) < 86400 or arg(0) > 31536000"},"expr":"","why":"delay within MIN/MAX"},{"name":"totalLocked_ledger","family":"in_sync","params":{"a":"post(\"totalLocked\")","b":"post_sum(\"deposits\", \"amount\")"},"expr":"","why":"total equals sum of deposits"},{"name":"totalLocked_eth_sync","family":"in_sync","params":{"a":"post(\"totalLocked\")","b":"post(\"ETH\", A0)"},"expr":"","why":"booked total moves with held ETH"},{"name":"nextId_monotone","family":"monotone","params":{"value":"post(\"nextId\")"},"expr":"","why":"ids never reused"},{"name":"unlock_never_earlier","family":"custom","params":{},"expr":"ok and pre(\"deposits\", arg(0), \"amount\") > 0 and post(\"deposits\", arg(0), \"unlockAt\") < pre(\"deposits\", arg(0), \"unlockAt\")","why":"unlock time only moves later"},{"name":"deposit_record","family":"custom","params":{},"expr":"ok and called(\"deposit\") and (post(\"deposits\", pre(\"nextId\"), \"owner\") != sender or post(\"deposits\", pre(\"nextId\"), \"amount\") != post(\"ETH\", A0) - pre(\"ETH\", A0) or post(\"deposits\", pre(\"nextId\"), \"unlockAt\") != now + arg(0))","why":"deposit records caller, value and unlock time"},{"name":"topUp_sync","family":"custom","params":{},"expr":"ok and called(\"topUp\") and post(\"deposits\", arg(0), \"amount\") - pre(\"deposits\", arg(0), \"amount\") != post(\"totalLocked\") - pre(\"totalLocked\")","why":"topUp adds same to deposit and total"},{"name":"withdraw_zeroes","family":"custom","params":{},"expr":"ok and called(\"withdraw\") and post(\"deposits\", arg(0), \"amount\") != 0","why":"withdraw empties the deposit"},{"name":"extend_no_side_effect","family":"custom","params":{},"expr":"ok and called(\"extend\") and (post(\"deposits\", arg(0), \"amount\") != pre(\"deposits\", arg(0), \"amount\") or post(\"deposits\", arg(0), \"owner\") != pre(\"deposits\", arg(0), \"owner\") or post(\"totalLocked\") != pre(\"totalLocked\"))","why":"extend only changes unlockAt"},{"name":"move_no_side_effect","family":"custom","params":{},"expr":"ok and called(\"moveOwnership\") and (post(\"deposits\", arg(0), \"amount\") != pre(\"deposits\", arg(0), \"amount\") or post(\"deposits\", arg(0), \"unlockAt\") != pre(\"deposits\", arg(0), \"unlockAt\") or post(\"totalLocked\") != pre(\"totalLocked\"))","why":"moveOwnership only changes owner"},{"name":"eth_out_only_withdraw","family":"custom","params":{},"expr":"ok and post(\"ETH\", A0) < pre(\"ETH\", A0) and not called(\"withdraw\")","why":"ETH leaves only through withdraw"},{"name":"withdraw_pays_at_most_amount","family":"custom","params":{},"expr":"ok and called(\"withdraw\") and pre(\"ETH\", A0) - post(\"ETH\", A0) > pre(\"deposits\", arg(0), \"amount\")","why":"withdraw pays out no more than the deposit"},{"name":"withdraw_exit","family":"must_succeed","params":{"fn":"withdraw","condition":"sender == U0 and sender == pre(\"deposits\", arg(0), \"owner\") and now >= pre(\"deposits\", arg(0), \"unlockAt\") and pre(\"deposits\", arg(0), \"amount\") > 0"},"expr":"","why":"unlocked owner can always withdraw"}],"invariants":[{"name":"eth_backs_total","expr":"post(\"ETH\", A0) < post(\"totalLocked\")","why":"held ETH covers locked total"},{"name":"total_eq_sum","expr":"post(\"totalLocked\") != post_sum(\"deposits\", \"amount\")","why":"total equals sum of deposits"},{"name":"open_has_owner","expr":"post(\"deposits\", u, \"amount\") > 0 and post(\"deposits\", u, \"owner\") == 0","why":"open deposits have an owner"}]}
+
+===== CASE R03 =====
+Contracts (the first is the one under test):
+### LiquidityVault
+storage: owner (address), totalLiquidity (uint256), liquidityOf (mapping(address,uint256))
+functions: addIncentives(uint256), deposit(uint256), withdraw(uint256)
+```solidity
+contract LiquidityVault {
+    MockToken public immutable asset;
+    address public owner;
+    uint256 public totalLiquidity;
+    mapping(address => uint256) public liquidityOf;
+
+    event Deposited(address indexed user, uint256 amount, uint256 liquidity);
+    event Withdrawn(address indexed user, uint256 liquidity, uint256 amount);
+    event IncentivesAdded(uint256 amount);
+
+    constructor(MockToken _asset) {
+        asset = _asset;
+        owner = msg.sender;
+    }
+
+    function addIncentives(uint256 amount) external {
+        require(msg.sender == owner, "owner");
+        asset.transferFrom(msg.sender, address(this), amount);
+        emit IncentivesAdded(amount);
+    }
+
+    function deposit(uint256 amount) external returns (uint256 liquidity) {
+        require(amount > 0, "zero");
+        uint256 bal = asset.balanceOf(address(this));
+        liquidity = (totalLiquidity == 0 || bal == 0) ? amount : amount * totalLiquidity / bal;
+        require(liquidity > 0, "liquidity");
+        asset.transferFrom(msg.sender, address(this), amount);
+        totalLiquidity += liquidity;
+        liquidityOf[msg.sender] += liquidity;
+        emit Deposited(msg.sender, amount, liquidity);
+    }
+
+    function withdraw(uint256 liquidity) external returns (uint256 amount) {
+        amount = _withdraw(msg.sender, liquidity);
+    }
+
+    function _withdraw(address user, uint256 liquidity) internal returns (uint256 amount) {
+        require(liquidityOf[user] >= liquidity, "balance");
+        uint256 bal = asset.balanceOf(address(this));
+        if (totalLiquidity == 0) {
+            amount = bal;
+        } else {
+            amount = liquidity * bal / totalLiquidity;
+        }
+        liquidityOf[user] -= liquidity;
+        totalLiquidity -= liquidity;
+        if (amount > 0) asset.transfer(user, amount);
+        emit Withdrawn(user, liquidity, amount);
+    }
+}
+```
+
+Deployment of this case (A0 is the contract under test):
+  A0 = LiquidityVault
+  A1 = MockToken
+  Users U0, U1, U2... are the accounts the solver controls (any of them can call anything).
+  Deployer / owner / minter: the deployer, an account the solver does NOT control.
+  Setup run once after deployment (Solidity, `this` = the deployer):
+    MockToken(A1).mint(address(this), 500e18);
+    MockToken(A1).approve(A0, type(uint256).max);
+    LiquidityVault(A0).addIncentives(500e18);
+    MockToken(A1).mint(U0, 1_000e18);
+    vm.prank(U0); MockToken(A1).approve(A0, type(uint256).max);
+    MockToken(A1).mint(U1, 1_000e18);
+    vm.prank(U1); MockToken(A1).approve(A0, type(uint256).max);
+
+RULES TO REVIEW:
+{"rules":[{"name":"liquidity_ledger","family":"ledger","params":{"accounts":"liquidityOf","total":"totalLiquidity"},"expr":"","why":"per-user liquidity sums to total"},{"name":"incentives_only_owner","family":"never_when","params":{"fn":"addIncentives","forbidden":"sender != pre(\"owner\")"},"expr":"","why":"only owner adds incentives"},{"name":"owner_fixed","family":"authorized_change","params":{"value":"post(\"owner\")","before":"pre(\"owner\")","admin":"pre(\"owner\")"},"expr":"","why":"owner never changes without admin"},{"name":"deposit_nonzero_mint","family":"nonzero_mint","params":{"fn":"deposit","amount_arg":"0"},"expr":"","why":"depositing always mints liquidity"},{"name":"deposit_pulls_amount","family":"exact_effect","params":{"fn":"deposit","value":"post(\"MockToken.balanceOf\", A0)","before":"pre(\"MockToken.balanceOf\", A0)","delta":"arg(0)"},"expr":"","why":"deposit takes exactly amount"},{"name":"withdraw_burns_user","family":"exact_decrease","params":{"fn":"withdraw","value":"post(\"liquidityOf\", sender)","before":"pre(\"liquidityOf\", sender)","delta":"arg(0)"},"expr":"","why":"withdraw burns exactly the given liquidity"},{"name":"withdraw_burns_total","family":"exact_decrease","params":{"fn":"withdraw","value":"post(\"totalLiquidity\")","before":"pre(\"totalLiquidity\")","delta":"arg(0)"},"expr":"","why":"total drops by burned liquidity"},{"name":"withdraw_fair","family":"fair_redemption","params":{"fn":"withdraw","shares_arg":"0","assets":"MockToken.balanceOf","shares":"totalLiquidity"},"expr":"","why":"no more than the redeemed fraction"},{"name":"withdraw_fair_custom","family":"custom","params":{},"expr":"ok and called(\"withdraw\") and wide(pre(\"MockToken.balanceOf\", A0) - post(\"MockToken.balanceOf\", A0)) * wide(pre(\"totalLiquidity\")) > wide(arg(0)) * wide(pre(\"MockToken.balanceOf\", A0))","why":"withdraw pays at most liquidity/total of pool (zero liquidity pays nothing)"},{"name":"withdraw_zero_pays_nothing","family":"custom","params":{},"expr":"ok and called(\"withdraw\") and arg(0) == 0 and post(\"MockToken.balanceOf\", A0) < pre(\"MockToken.balanceOf\", A0)","why":"burning nothing returns nothing"},{"name":"share_price_monotone","family":"custom","params":{},"expr":"ok and pre(\"totalLiquidity\") > 0 and post(\"totalLiquidity\") > 0 and wide(post(\"MockToken.balanceOf\", A0)) * wide(pre(\"totalLiquidity\")) < wide(pre(\"MockToken.balanceOf\", A0)) * wide(post(\"totalLiquidity\"))","why":"assets per liquidity never drop"},{"name":"deposit_fair","family":"custom","params":{},"expr":"ok and called(\"deposit\") and pre(\"totalLiquidity\") > 0 and wide(post(\"liquidityOf\", sender) - pre(\"liquidityOf\", sender)) * wide(pre(\"MockToken.balanceOf\", A0)) > wide(arg(0)) * wide(pre(\"totalLiquidity\"))","why":"deposit mints no more than its fair share"},{"name":"no_third_party_liquidity_loss","family":"custom","params":{},"expr":"ok and u != sender and post(\"liquidityOf\", u) < pre(\"liquidityOf\", u)","why":"nobody loses liquidity in others' calls"},{"name":"no_third_party_token_loss","family":"custom","params":{},"expr":"ok and u != sender and u != A0 and post(\"MockToken.balanceOf\", u) < pre(\"MockToken.balanceOf\", u)","why":"nobody loses tokens in others' calls"},{"name":"vault_out_only_withdraw","family":"custom","params":{},"expr":"ok and post(\"MockToken.balanceOf\", A0) < pre(\"MockToken.balanceOf\", A0) and not called(\"withdraw\")","why":"assets leave only via withdraw"},{"name":"withdraw_exit","family":"exit_amount","params":{"fn":"withdraw","amount_arg":"0","balance":"liquidityOf"},"expr":"","why":"user can always withdraw their liquidity"},{"name":"token_ledger","family":"ledger","params":{"accounts":"MockToken.balanceOf","total":"MockToken.totalSupply"},"expr":"","why":"token conservation"}],"invariants":[{"name":"liq_eq_sum","expr":"post(\"totalLiquidity\") != post_sum(\"liquidityOf\")","why":"total equals sum"},{"name":"liq_backed","expr":"post(\"totalLiquidity\") > 0 and post(\"MockToken.balanceOf\", A0) == 0","why":"outstanding liquidity backed"},{"name":"user_le_total","expr":"post(\"liquidityOf\", u) > post(\"totalLiquidity\")","why":"no user exceeds total"}]}

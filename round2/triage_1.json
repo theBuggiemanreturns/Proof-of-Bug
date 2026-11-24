@@ -1,0 +1,200 @@
+{
+ "triage": [
+  {
+   "case": "R01",
+   "n": 1,
+   "rule": "create_records_lock",
+   "verdict": "rule_wrong",
+   "why": "The mismatch comes only from uint64(block.timestamp) truncating at t=2^68, an unreachable timestamp; at any realistic time the lock is recorded as requested."
+  },
+  {
+   "case": "R01",
+   "n": 2,
+   "rule": "release_updates_lock_shares",
+   "verdict": "real_bug",
+   "why": "release moves sharesWithdrawn and totalShares but never lowers l.shares, so a later cancel computes unvested from stale shares, overpays and over-subtracts totalShares."
+  },
+  {
+   "case": "R01",
+   "n": 3,
+   "rule": "totalShares_in_sync_locks",
+   "verdict": "real_bug",
+   "why": "Same root cause: release lowers totalShares but not the lock's shares, so the two records that stand for the same value diverge."
+  },
+  {
+   "case": "R02",
+   "n": 4,
+   "rule": "deposit_record",
+   "verdict": "rule_wrong",
+   "why": "The deviation is uint64 truncation of block.timestamp at t>2^64, an unreachable time; at realistic times deposit records owner, value and unlockAt correctly."
+  },
+  {
+   "case": "R02",
+   "n": 5,
+   "rule": "owner_changes_only_via_move",
+   "verdict": "rule_wrong",
+   "why": "The owner itself called moveOwnership (nested in its own withdraw callback); that is a legitimate ownership move the top-level-call filter misclassifies."
+  },
+  {
+   "case": "R03",
+   "n": 6,
+   "rule": "withdraw_fair_custom",
+   "verdict": "real_bug",
+   "why": "With totalLiquidity == 0, withdraw(0) pays the caller the whole balance (the owner's 500e18 incentives) for burning nothing."
+  },
+  {
+   "case": "R03",
+   "n": 7,
+   "rule": "withdraw_zero_pays_nothing",
+   "verdict": "real_bug",
+   "why": "Same: the totalLiquidity == 0 branch lets anyone take all incentives with zero liquidity."
+  },
+  {
+   "case": "R04",
+   "n": 8,
+   "rule": "delegate_over_balance",
+   "verdict": "real_bug",
+   "why": "U1 has only locked vesting; delegate lets locked count toward the limit but debits spendable balanceOf unchecked, wrapping it to ~2^256."
+  },
+  {
+   "case": "R04",
+   "n": 9,
+   "rule": "delegate_debits",
+   "verdict": "real_bug",
+   "why": "Same unchecked underflow: balanceOf wraps instead of decreasing by amount."
+  },
+  {
+   "case": "R04",
+   "n": 10,
+   "rule": "conservation",
+   "verdict": "real_bug",
+   "why": "The wrap creates a huge spendable balance from nothing, breaking value conservation."
+  },
+  {
+   "case": "R04",
+   "n": 11,
+   "rule": "balance_bounded",
+   "verdict": "real_bug",
+   "why": "The wrapped balance vastly exceeds totalSupply: transferable value from nothing."
+  },
+  {
+   "case": "R04",
+   "n": 12,
+   "rule": "balance_no_wrap",
+   "verdict": "real_bug",
+   "why": "delegate increased the caller's spendable balance via unchecked underflow."
+  },
+  {
+   "case": "R04",
+   "n": 13,
+   "rule": "no_third_party_balance_loss",
+   "verdict": "real_bug",
+   "why": "After the delegate wrap, U1's balance is near 2^256 and U0's unchecked transfer to U1 overflows it, so U1 loses balance in a call it did not make; consequence of the delegate underflow plus unchecked transfer."
+  },
+  {
+   "case": "R04",
+   "n": 14,
+   "rule": "transfer_conserves",
+   "verdict": "real_bug",
+   "why": "Same: unchecked balanceOf[to] += amount overflows on the corrupted balance, destroying value."
+  },
+  {
+   "case": "R04",
+   "n": 15,
+   "rule": "transfer_exact",
+   "verdict": "real_bug",
+   "why": "Same overflow: the recipient's balance does not rise by amount."
+  },
+  {
+   "case": "R04",
+   "n": 16,
+   "rule": "undelegate_credits",
+   "verdict": "real_bug",
+   "why": "U1 delegated locked tokens, wrapping balanceOf; undelegate then wraps it back to 0, so the credit is not pre+amount. Root cause is the delegate underflow."
+  },
+  {
+   "case": "R05",
+   "n": 17,
+   "rule": "withdraw_fee_floor",
+   "verdict": "real_bug",
+   "why": "setMinFee reverted, so minFee is the deployer's value, yet withdraw accepted fee 112 below it; withdraw never enforces minFee (and accepts negative fees)."
+  },
+  {
+   "case": "R06",
+   "n": 18,
+   "rule": "rebalance_only_current",
+   "verdict": "real_bug",
+   "why": "setRebalancer never revokes hasRebalanceRole from the replaced rebalancer, so U2 (replaced by U1 in setup) can still move treasury assets."
+  },
+  {
+   "case": "R06",
+   "n": 19,
+   "rule": "deposit_nonzero",
+   "verdict": "rule_wrong",
+   "why": "deposit has no return value so ret is always 0; here it minted 16 shares, a fair amount, so nothing was lost."
+  },
+  {
+   "case": "R07",
+   "n": 20,
+   "rule": "deposit_fair",
+   "verdict": "real_bug",
+   "why": "A one-element depositMulti values the deposit against asset0 holdings only, minting about twice the fair shares and diluting existing holders."
+  },
+  {
+   "case": "R07",
+   "n": 21,
+   "rule": "share_price_monotone",
+   "verdict": "real_bug",
+   "why": "Same: the single-asset deposit lowers holdings per share for U0."
+  },
+  {
+   "case": "R08",
+   "n": 22,
+   "rule": "importLegacy_resets_debt",
+   "verdict": "real_bug",
+   "why": "importLegacy adds amount without harvesting or updating rewardDebt, so imported stake claims rewards accrued before it existed."
+  },
+  {
+   "case": "R08",
+   "n": 23,
+   "rule": "import_no_reward_windfall",
+   "verdict": "real_bug",
+   "why": "Same: the importer's pending reward jumps by amount*acc, stealing rewards owed to existing stakers."
+  },
+  {
+   "case": "R09",
+   "n": 24,
+   "rule": "ledger",
+   "verdict": "rule_wrong",
+   "why": "The only successful step is a MockToken transfer, which changes no DeflationaryToken storage; by code every A0 path keeps sum(balanceOf) == totalSupply, so this looks like an artefact of how the sum is tracked, not a contract bug."
+  },
+  {
+   "case": "R09",
+   "n": 25,
+   "rule": "pair_product",
+   "verdict": "real_bug",
+   "why": "Selling to the pair burns the tax from the pair's own balance and syncs, shrinking the reserves and k, which allows price manipulation; the burn should come from the seller."
+  },
+  {
+   "case": "R11",
+   "n": 26,
+   "rule": "deposit_fair",
+   "verdict": "real_bug",
+   "why": "deposit(amount18 < 1e12) pulls amount18/1e12 = 0 tokens but mints LP for the full amount18: free LP that dilutes holders."
+  },
+  {
+   "case": "R11",
+   "n": 27,
+   "rule": "deposit_pulls_something",
+   "verdict": "real_bug",
+   "why": "Same rounding: the deposit succeeded and minted LP while pulling nothing."
+  },
+  {
+   "case": "R11",
+   "n": 28,
+   "rule": "share_price_monotone",
+   "verdict": "real_bug",
+   "why": "Same: LP supply grew with no assets added, lowering assets per LP."
+  }
+ ]
+}

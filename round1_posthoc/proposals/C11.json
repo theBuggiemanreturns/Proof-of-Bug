@@ -1,0 +1,156 @@
+{
+ "rules": [
+  {
+   "name": "id_monotone",
+   "family": "monotone",
+   "params": {
+    "value": "post(\"nextStreamId\")"
+   },
+   "expr": "",
+   "why": "ids only rise"
+  },
+  {
+   "name": "create_id",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"createStream\") and (ret != pre(\"nextStreamId\") or post(\"nextStreamId\") != pre(\"nextStreamId\") + 1)",
+   "why": "create uses next id"
+  },
+  {
+   "name": "create_deposit_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"createStream\") and (post(\"streams\", ret, \"deposit\") != arg(1) * (arg(3) - arg(2)) or post(\"TokenC11.balanceOf\", A0) != pre(\"TokenC11.balanceOf\", A0) + arg(1) * (arg(3) - arg(2)))",
+   "why": "deposit equals rate*duration, fully escrowed (no truncation)"
+  },
+  {
+   "name": "create_fields",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"createStream\") and (post(\"streams\", ret, \"sender\") != sender or post(\"streams\", ret, \"recipient\") != arg(0) or post(\"streams\", ret, \"ratePerSecond\") != arg(1) or post(\"streams\", ret, \"startTime\") != arg(2) or post(\"streams\", ret, \"stopTime\") != arg(3) or post(\"streams\", ret, \"withdrawn\") != 0 or post(\"streams\", ret, \"cancelled\") != 0)",
+   "why": "stream recorded as requested"
+  },
+  {
+   "name": "create_fresh",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"createStream\") and pre(\"streams\", ret, \"sender\") != 0",
+   "why": "create never overwrites"
+  },
+  {
+   "name": "create_params",
+   "family": "never_when",
+   "params": {
+    "fn": "createStream",
+    "forbidden": "arg(0) == 0 or arg(0) == A0 or arg(1) == 0 or arg(2) < now or arg(3) <= arg(2)"
+   },
+   "expr": "",
+   "why": "valid parameters only"
+  },
+  {
+   "name": "withdrawn_le_deposit",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"withdraw\") or called(\"cancel\")) and post(\"streams\", arg(0), \"withdrawn\") > post(\"streams\", arg(0), \"deposit\")",
+   "why": "never pay out more than deposited"
+  },
+  {
+   "name": "withdrawn_le_streamed",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and (now <= pre(\"streams\", arg(0), \"startTime\") or (now < pre(\"streams\", arg(0), \"stopTime\") and post(\"streams\", arg(0), \"withdrawn\") > (now - pre(\"streams\", arg(0), \"startTime\")) * pre(\"streams\", arg(0), \"ratePerSecond\")) or (now >= pre(\"streams\", arg(0), \"stopTime\") and post(\"streams\", arg(0), \"withdrawn\") > (pre(\"streams\", arg(0), \"stopTime\") - pre(\"streams\", arg(0), \"startTime\")) * pre(\"streams\", arg(0), \"ratePerSecond\")))",
+   "why": "cannot withdraw ahead of time"
+  },
+  {
+   "name": "withdraw_auth",
+   "family": "never_when",
+   "params": {
+    "fn": "withdraw",
+    "forbidden": "sender != pre(\"streams\", arg(0), \"recipient\") or pre(\"streams\", arg(0), \"cancelled\") != 0 or arg(1) == 0"
+   },
+   "expr": "",
+   "why": "only recipient, not cancelled, nonzero"
+  },
+  {
+   "name": "withdraw_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and (post(\"streams\", arg(0), \"withdrawn\") != pre(\"streams\", arg(0), \"withdrawn\") + arg(1) or post(\"TokenC11.balanceOf\", A0) + arg(1) != pre(\"TokenC11.balanceOf\", A0) or post(\"TokenC11.balanceOf\", sender) != pre(\"TokenC11.balanceOf\", sender) + arg(1))",
+   "why": "withdraw pays exactly amount"
+  },
+  {
+   "name": "cancel_auth",
+   "family": "never_when",
+   "params": {
+    "fn": "cancel",
+    "forbidden": "(sender != pre(\"streams\", arg(0), \"sender\") and sender != pre(\"streams\", arg(0), \"recipient\")) or pre(\"streams\", arg(0), \"cancelled\") != 0"
+   },
+   "expr": "",
+   "why": "only parties, once"
+  },
+  {
+   "name": "cancel_marks",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"cancel\") and post(\"streams\", arg(0), \"cancelled\") == 0",
+   "why": "cancel marks cancelled"
+  },
+  {
+   "name": "cancel_releases_rest",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"cancel\") and post(\"TokenC11.balanceOf\", A0) + pre(\"streams\", arg(0), \"deposit\") != pre(\"TokenC11.balanceOf\", A0) + pre(\"streams\", arg(0), \"withdrawn\")",
+   "why": "cancel releases exactly the unpaid deposit"
+  },
+  {
+   "name": "cancel_recipient_owed",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"cancel\") and pre(\"streams\", arg(0), \"recipient\") != pre(\"streams\", arg(0), \"sender\") and now >= pre(\"streams\", arg(0), \"stopTime\") and post(\"TokenC11.balanceOf\", pre(\"streams\", arg(0), \"recipient\")) + pre(\"streams\", arg(0), \"withdrawn\") != pre(\"TokenC11.balanceOf\", pre(\"streams\", arg(0), \"recipient\")) + pre(\"streams\", arg(0), \"deposit\")",
+   "why": "after stop, cancel pays recipient everything left"
+  },
+  {
+   "name": "cancel_before_start",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"cancel\") and pre(\"streams\", arg(0), \"recipient\") != pre(\"streams\", arg(0), \"sender\") and now <= pre(\"streams\", arg(0), \"startTime\") and post(\"TokenC11.balanceOf\", pre(\"streams\", arg(0), \"sender\")) != pre(\"TokenC11.balanceOf\", pre(\"streams\", arg(0), \"sender\")) + pre(\"streams\", arg(0), \"deposit\")",
+   "why": "before start, cancel refunds all"
+  },
+  {
+   "name": "cancelled_frozen",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"withdraw\") or called(\"cancel\")) and pre(\"streams\", arg(0), \"cancelled\") != 0 and (post(\"streams\", arg(0), \"withdrawn\") != pre(\"streams\", arg(0), \"withdrawn\") or post(\"streams\", arg(0), \"cancelled\") == 0)",
+   "why": "cancelled stream frozen"
+  },
+  {
+   "name": "terms_immutable",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"withdraw\") or called(\"cancel\")) and pre(\"streams\", arg(0), \"sender\") != 0 and (post(\"streams\", arg(0), \"deposit\") != pre(\"streams\", arg(0), \"deposit\") or post(\"streams\", arg(0), \"ratePerSecond\") != pre(\"streams\", arg(0), \"ratePerSecond\") or post(\"streams\", arg(0), \"startTime\") != pre(\"streams\", arg(0), \"startTime\") or post(\"streams\", arg(0), \"stopTime\") != pre(\"streams\", arg(0), \"stopTime\") or post(\"streams\", arg(0), \"sender\") != pre(\"streams\", arg(0), \"sender\") or post(\"streams\", arg(0), \"recipient\") != pre(\"streams\", arg(0), \"recipient\"))",
+   "why": "stream terms never change"
+  },
+  {
+   "name": "withdrawn_monotone",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"withdraw\") or called(\"cancel\")) and post(\"streams\", arg(0), \"withdrawn\") < pre(\"streams\", arg(0), \"withdrawn\")",
+   "why": "withdrawn only rises"
+  },
+  {
+   "name": "token_third_party",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"createStream\") or called(\"withdraw\") or called(\"cancel\")) and u != sender and u != A0 and post(\"TokenC11.balanceOf\", u) < pre(\"TokenC11.balanceOf\", u)",
+   "why": "no one loses tokens in others' calls"
+  },
+  {
+   "name": "withdraw_pays_recipient_only",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"withdraw\") and u != sender and u != A0 and post(\"TokenC11.balanceOf\", u) != pre(\"TokenC11.balanceOf\", u)",
+   "why": "withdraw pays only recipient"
+  }
+ ],
+ "invariants": []
+}

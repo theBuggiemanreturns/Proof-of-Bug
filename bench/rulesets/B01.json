@@ -1,0 +1,17 @@
+{
+ "case": "B01",
+ "rules": {
+  "donate_works": "called(\"donate\") and reverted and (arg(0) >= 0)",
+  "nonzero": "called(\"deposit\") and ok and arg(0) > 0 and ret == 0",
+  "deposit_supply": "called(\"deposit\") and ok and post(\"totalSupply\") != pre(\"totalSupply\") + ret",
+  "donate_assets": "called(\"donate\") and ok and post(\"totalAssets\") != pre(\"totalAssets\") + arg(0)",
+  "deposit_assets": "called(\"deposit\") and ok and post(\"totalAssets\") != pre(\"totalAssets\") + arg(0)",
+  "deposit_works": "called(\"deposit\") and reverted and (arg(0) > 0 and (pre(\"totalSupply\") == 0 or wide(arg(0)) * pre(\"totalSupply\") >= pre(\"totalAssets\")))",
+  "fair_mint": "called(\"deposit\") and ok and pre(\"totalSupply\") > 0 and wide(ret) * pre(\"totalAssets\") > wide(arg(0)) * pre(\"totalSupply\")",
+  "fair_floor": "called(\"deposit\") and ok and pre(\"totalSupply\") > 0 and wide(ret + 1) * pre(\"totalAssets\") <= wide(arg(0)) * pre(\"totalSupply\")",
+  "share_price": "ok and pre(\"totalSupply\") > 0 and post(\"totalSupply\") > 0 and wide(post(\"totalAssets\")) * pre(\"totalSupply\") < wide(pre(\"totalAssets\")) * post(\"totalSupply\")"
+ },
+ "strength": 1.0,
+ "holds_by_construction": [],
+ "invariants": {}
+}

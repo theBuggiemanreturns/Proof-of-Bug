@@ -1,0 +1,194 @@
+{
+ "rules": [
+  {
+   "name": "claim_paused",
+   "family": "never_when",
+   "params": {
+    "fn": "claim",
+    "forbidden": "pre(\"paused\") != 0"
+   },
+   "expr": "",
+   "why": "no claims while paused"
+  },
+  {
+   "name": "claim_expired",
+   "family": "never_when",
+   "params": {
+    "fn": "claim",
+    "forbidden": "now > arg(2)"
+   },
+   "expr": "",
+   "why": "no claims after deadline"
+  },
+  {
+   "name": "claim_replay",
+   "family": "never_when",
+   "params": {
+    "fn": "claim",
+    "forbidden": "pre(\"nonceUsed\", sender, arg(1)) != 0"
+   },
+   "expr": "",
+   "why": "nonce single-use"
+  },
+  {
+   "name": "claim_bad_sig_form",
+   "family": "never_when",
+   "params": {
+    "fn": "claim",
+    "forbidden": "(arg(3) != 27 and arg(3) != 28) or arg(5) > 57896044618658097711785492504343953926418782139537452191302581570759080747168"
+   },
+   "expr": "",
+   "why": "malleable/invalid signatures rejected"
+  },
+  {
+   "name": "nonce_marked",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"claim\") and post(\"nonceUsed\", sender, arg(1)) == 0",
+   "why": "claim marks the nonce used"
+  },
+  {
+   "name": "nonce_sticky",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"claim\") and pre(\"nonceUsed\", sender, arg(1)) != 0 and post(\"nonceUsed\", sender, arg(1)) == 0",
+   "why": "used nonce never reset"
+  },
+  {
+   "name": "claim_exact",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"claim\") and (post(\"totalClaimed\", sender) != pre(\"totalClaimed\", sender) + arg(0) or post(\"TokenC05.balanceOf\", A0) + arg(0) != pre(\"TokenC05.balanceOf\", A0) or post(\"TokenC05.balanceOf\", sender) != pre(\"TokenC05.balanceOf\", sender) + arg(0))",
+   "why": "claim pays exactly amount to caller and books it"
+  },
+  {
+   "name": "claimed_monotone",
+   "family": "monotone",
+   "params": {
+    "value": "post(\"totalClaimed\", u)"
+   },
+   "expr": "",
+   "why": "cumulative claims only rise"
+  },
+  {
+   "name": "claimed_only_caller",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and u != sender and post(\"totalClaimed\", u) != pre(\"totalClaimed\", u)",
+   "why": "only own totalClaimed changes"
+  },
+  {
+   "name": "claimed_only_claim",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and not called(\"claim\") and post(\"totalClaimed\", u) != pre(\"totalClaimed\", u)",
+   "why": "totalClaimed only via claim"
+  },
+  {
+   "name": "token_out_auth",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and post(\"TokenC05.balanceOf\", A0) < pre(\"TokenC05.balanceOf\", A0) and not called(\"claim\") and sender != pre(\"owner\")",
+   "why": "only claim or owner moves pool tokens"
+  },
+  {
+   "name": "token_third_party",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and (called(\"claim\") or called(\"sweep\") or called(\"setSigner\") or called(\"setPaused\")) and u != sender and u != A0 and post(\"TokenC05.balanceOf\", u) < pre(\"TokenC05.balanceOf\", u)",
+   "why": "no one loses tokens in others' calls"
+  },
+  {
+   "name": "claim_only_to_caller",
+   "family": "custom",
+   "params": {},
+   "expr": "ok and called(\"claim\") and u != sender and u != A0 and post(\"TokenC05.balanceOf\", u) != pre(\"TokenC05.balanceOf\", u)",
+   "why": "claim pays only the caller"
+  },
+  {
+   "name": "signer_auth",
+   "family": "authorized_change",
+   "params": {
+    "value": "post(\"signer\")",
+    "before": "pre(\"signer\")",
+    "admin": "pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "only owner rotates signer"
+  },
+  {
+   "name": "paused_auth",
+   "family": "authorized_change",
+   "params": {
+    "value": "post(\"paused\")",
+    "before": "pre(\"paused\")",
+    "admin": "pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "only owner pauses"
+  },
+  {
+   "name": "owner_auth",
+   "family": "authorized_change",
+   "params": {
+    "value": "post(\"owner\")",
+    "before": "pre(\"owner\")",
+    "admin": "pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "owner fixed"
+  },
+  {
+   "name": "setsigner_owner",
+   "family": "never_when",
+   "params": {
+    "fn": "setSigner",
+    "forbidden": "sender != pre(\"owner\") or arg(0) == 0"
+   },
+   "expr": "",
+   "why": "owner only, nonzero signer"
+  },
+  {
+   "name": "setpaused_owner",
+   "family": "never_when",
+   "params": {
+    "fn": "setPaused",
+    "forbidden": "sender != pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "owner only"
+  },
+  {
+   "name": "sweep_owner",
+   "family": "never_when",
+   "params": {
+    "fn": "sweep",
+    "forbidden": "sender != pre(\"owner\") or pre(\"paused\") == 0"
+   },
+   "expr": "",
+   "why": "owner only and only while paused"
+  },
+  {
+   "name": "signer_frozen",
+   "family": "frozen_when",
+   "params": {
+    "value": "post(\"signer\")",
+    "condition": "sender != pre(\"owner\")"
+   },
+   "expr": "",
+   "why": "signer changes only through owner"
+  }
+ ],
+ "invariants": [
+  {
+   "name": "signer_nonzero",
+   "expr": "post(\"signer\") == 0",
+   "why": "signer never zero"
+  },
+  {
+   "name": "owner_nonzero",
+   "expr": "post(\"owner\") == 0",
+   "why": "owner set"
+  }
+ ]
+}

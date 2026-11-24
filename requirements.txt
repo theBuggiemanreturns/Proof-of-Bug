@@ -1,0 +1,4 @@
+python-sat
+anthropic
+pycryptodome
+z3-solver
