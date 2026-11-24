@@ -21,6 +21,8 @@ Solidity → Yul → NAND circuit (automatic compiler) → SAT bug search → re
 | `proofofbug/model.py` | k-transaction model over one or more contracts (solver picks contract, function, sender, arguments and the attacker's callback), rule language, bug search |
 | `proofofbug/evm.py` | Runs sequences on the real contracts in Foundry: deploys them at the circuit's addresses, plants a programmable attacker contract, reads back storage |
 | `proofofbug/check.py` | Differential test (circuit vs EVM) and replay of found attacks with exact 256-bit rule checks |
+| `proofofbug/blind.py` | Blind-round harness: rule prompts, review, the four-engine search per case, verdicts, sealing |
+| `proofofbug/trail.py`, `proofofbug/report.py` | Audit trail of every engine claim and the EVM's answer; step-by-step reports and the AI-review prompt |
 | `proofofbug/bench.py`, `bench/level1.py`, `bench/level2.py` | Benchmark runner and cases |
 | `src/bench/Level1.sol`, `src/bench/Level2.sol` | Benchmark contracts (each with a `fixed_` switch) |
 | `viz/` | Gate viewer |
@@ -140,6 +142,27 @@ Smart contract -> logic circuit (NAND only) -> SAT solver finds the bug -> real 
 | `hunt.py` | Runs the bug search and prints the counterexample or a proof of no bug |
 | `gen_diff.py` | Generates a Foundry test with 400 random sequences, checking the circuit against the real contract |
 | `test/Exploit.t.sol` | Replays the solver's attack against the real Solidity |
+
+## Step-by-step reports (audit trail)
+
+Every blind run records each claim an engine makes ("this sequence breaks these rules") together with
+the real EVM's answer per transaction: whether it reverted, and every storage value that changed. A
+claim the EVM does not reproduce is kept as "thrown out", with the evidence. This is record-keeping
+only (`proofofbug/trail.py`); no engine reads it back.
+
+    python -m proofofbug.report --round round2_posthoc            # ROUND/reports/<case>.md + INDEX.md
+    python -m proofofbug.report --round round2_posthoc --only R05
+
+Each report has nine sections: what was deployed; the rules (with the writer's reasons and the review);
+how hard the machine looked (widths, depths, model check, limits, coverage gaps); every rule engine by
+engine; each confirmed attack with the EVM's before/after values and the triage; each claim thrown out
+and how it was disproved; the proofs and the facts they relied on; a coverage map (functions and
+storage no rule names); and the raw run log.
+
+`ROUND/reports/REVIEW_PROMPT.txt` is the task for an AI reviewer. It reads a report and the source and
+lists what the engines were never asked: missed properties, findings that combine, triage calls that
+look wrong, shallow coverage, and limits that could hide an attack. Every point must come with a new
+rule, and that rule goes back through the machine. The reviewer proposes; the machine decides.
 
 ## Rebuild
 

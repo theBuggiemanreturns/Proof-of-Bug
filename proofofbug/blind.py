@@ -151,6 +151,10 @@ def hunt_case(case, root, kept, invs, budget, depths, ladder, log):
     # 1. fuzzing on the real EVM with values from the contract itself: any number size, cheap
     from .fuzz import fuzz
     m_small, cfg_small, _ = build(dict(case, rules=rules), True, root, 8, 1, users, unroll)
+    # record only: the attack surface (callable functions, storage) for the report's coverage map
+    rec["surface"] = {"functions": sorted({(f"{c.name}." if a != m_small.contracts[0][1] else "") + f[1]
+                                           for f in m_small.funcs for c, a in m_small.contracts if a == f[0]}),
+                      "storage": {c.name: list(c.storage) for c, _ in m_small.contracts}}
     from .yul import ARRAY_MAX
     arr = sorted({f[2] for f in m_small.funcs if any(str(t).startswith("length:") for t in f[4])})
     if arr:  # a bound on what the caller sends: searches AND proofs only cover arrays this short
@@ -265,6 +269,9 @@ def hunt_case(case, root, kept, invs, budget, depths, ladder, log):
                     hints.pop(b, None); dropped.append(b)
             proof = {n: v["status"] for n, v in res.items() if not n.startswith("hint:")}
             rec["hints_dropped"] = dropped
+            from .trail import name_raw_slots
+            rec["proof_detail"] = name_raw_slots(m0, {n: {k: v.get(k) for k in ("status", "detail", "lemmas", "invariants")}
+                                                      for n, v in res.items()})  # record only: what each proof used or why it failed
             # 5. a counterexample to induction that also breaks the rule from the real deployed state
             #    is a real attack: replay each on the EVM
             from .cexreplay import replay_cex
@@ -310,9 +317,10 @@ def _confirm(m, cfg, rules, names, seq, label, findings, unconfirmed, status, lo
     from .check import rule_on_trace
     from . import evm
     trace = evm.run(cfg, cfg["tag"] + "_replay", [seq], m.watch)[0]
-    hit_any = False
+    hit_any, hits = False, {}
     for n in names:
         hit = rule_on_trace(m, rules[n], seq, trace)
+        hits[n] = hit
         if hit is not None:
             shown = [x for x, st in zip(seq[:hit + 1], trace["txs"][:hit + 1]) if st["ok"] or x is seq[hit]]
             findings[n] = {"width": label, "attack": [fmt_tx(x) for x in seq[:hit + 1]],
@@ -320,6 +328,11 @@ def _confirm(m, cfg, rules, names, seq, label, findings, unconfirmed, status, lo
             status[n].append((label, "bug", 0))
             log(f"    FINDING {n} at {label}: " + " -> ".join(findings[n]["attack"]))
             hit_any = True
+    from . import trail
+    # the circuit claims at least one of `names` breaks; rules it did not break on the EVM are
+    # recorded as rejected only when nothing was confirmed (then the claim as a whole was false)
+    shown = hits if not hit_any else {n: h for n, h in hits.items() if h is not None}
+    trail.record("bit-level search", f"{label} (circuit width {m.W} bits)", list(shown), seq, trace, m, shown)
     return hit_any
 
 
@@ -330,7 +343,10 @@ def cmd_run(root, cases, only, budget, depths, ladder):
         if only and case["id"] not in only.split(","):
             continue
         t0 = time.time()
-        log = lambda *a: print(*a, flush=True)
+        from . import trail
+        trail.reset()
+        lines = []  # the run log, kept in the record for the report
+        log = lambda *a: (print(*a, flush=True), lines.append(" ".join(map(str, a))))
         pfile = rdir(root, "proposals", f"{case['id']}.json")
         rec = {"id": case["id"]}
         try:
@@ -361,6 +377,7 @@ def cmd_run(root, cases, only, budget, depths, ladder):
             rec["verdict"], rec["error"] = "ERROR", f"{type(e).__name__}: {e}"[:400]
             rec["trace"] = traceback.format_exc()[-1500:]
         rec["seconds"] = round(time.time() - t0, 1)
+        rec["log"], rec["trail"] = lines, list(trail.TRAIL)
         os.makedirs(outdir(root), exist_ok=True)
         json.dump(rec, open(os.path.join(outdir(root), f"{case['id']}.json"), "w"), indent=1, default=str)
         print(f"{case['id']}: {rec['verdict']}  ({rec['seconds']}s)", flush=True)
@@ -386,6 +403,69 @@ def _triage(root):
     return out
 
 
+def classify(cid, r, tri):
+    """The verdict for one case record and its evidence line (also used by report.py)."""
+    for cv in list(r.get("coverage", [])):
+        if "explored by the bit-level search only" in cv and cv.count("(") == cv.count("explored by the bit-level"):
+            r["coverage"].remove(cv)
+            r.setdefault("limits", []).append("attacker callbacks searched by the bit-level engine only (its width): "
+                                              + cv.split(": ", 1)[1].split(" (")[0])
+    v = r["verdict"]
+    proven = [n for n, x in r.get("proof", {}).items() if x == "proven"]
+    nrules = len(r.get("rules", {}))
+    touts = sorted({n for n, st in r.get("status", {}).items() if st and st[-1][1] == "timeout"})
+    real = {n: f for n, f in r.get("findings", {}).items() if tri.get((cid, n), ("?",))[0] == "real_bug"}
+    wrong = [n for n in r.get("findings", {}) if tri.get((cid, n), ("?",))[0] == "rule_wrong"]
+    pending = [n for n in r.get("findings", {}) if (cid, n) not in tri]
+    if real:
+        verdict = "BUGGY"
+        ev = "; ".join(f"`{n}`: " + " -> ".join(f["attack"]) + f" (triage: {tri[(cid, n)][1]})" for n, f in real.items())
+    elif v in ("UNSUPPORTED", "ERROR"):
+        verdict = v
+        ev = r.get("unsupported") or r.get("error") or ""
+    else:
+        depth = sorted({x[0] for st in r.get("status", {}).values() for x in st if x[1] == "clean"})
+        held = [n for n in r.get("rules", {}) if n not in r.get("findings", {})]
+        # a rule is covered at full width if the exact search found it clean, or it is proven
+        full = [n for n in held if r.get("proof", {}).get(n) == "proven" or
+                any(x[0].startswith("exact") and x[1] == "clean" for x in r.get("status", {}).get(n, []))]
+        # a rule no engine covered: no proof and no clean search at all (timeouts, circuit attacks
+        # the EVM rejected, unsupported). One such rule leaves the case INCOMPLETE.
+        uncovered = [n for n in held if n not in full and
+                     not any(x[1] == "clean" for x in r.get("status", {}).get(n, []))]
+        if uncovered or r.get("coverage"):
+            verdict = "INCOMPLETE"
+        elif r.get("limits"):
+            verdict = "NO BUG FOUND WITHIN LIMITS"
+        elif len(full) == len(held) or not r.get("magnitude"):
+            verdict = "NO BUG FOUND"
+        else:
+            verdict = "NO BUG FOUND WITHIN LIMITS"
+        ev = (f"{nrules} rules; no real counterexample (searched {', '.join(depth) or 'nothing'}); "
+              f"proven for all sizes: {len(proven)}/{nrules}")
+        if touts:
+            ev += f"; search timed out on {len(touts)}"
+        if uncovered:
+            ev += f"; not covered by any engine: {', '.join(uncovered)}"
+        if r.get("coverage"):
+            ev += "; coverage: " + "; ".join(r["coverage"])
+        if r.get("limits"):
+            ev += "; limits: " + "; ".join(r["limits"])
+        if r.get("magnitude"):
+            ev += f"; behaviour above the bit-level width: {', '.join(r['magnitude'])}; full-width (exact or proven) for {len(full)}/{len(held)} rules"
+    if r.get("unconfirmed"):  # circuit attacks the EVM rejected: the circuit is unreliable there
+        ev += "; bit-level attacks not reproduced on the EVM (rule kept open for the exact search and prover): " + \
+              ", ".join(f"{n} ({next((x[1] for x in r['status'].get(n, []) if x[0].startswith('exact') or x[0] == 'proof'), 'no other engine')})"
+                        for n in r["unconfirmed"] if n not in r.get("findings", {}))
+    if wrong:
+        ev += f"; rule-writer errors (triaged rule_wrong): {', '.join(wrong)}"
+    if pending:
+        ev += f"; NOT YET TRIAGED: {', '.join(pending)}"
+    if r.get("diff"):
+        ev += f"; circuit vs EVM: {r['diff']['compared']} txs, {r['diff']['mismatches']} mismatches"
+    return verdict, ev
+
+
 def write_verdicts(root, results):
     # a sealed verdict file (its hash was sent to the author) must never change again
     if os.path.exists(rdir(root, "VERDICTS.sha256")):
@@ -405,65 +485,7 @@ def write_verdicts(root, results):
              "UNSUPPORTED = the engine cannot model it.", "",
              "| Case | Verdict | Evidence |", "|---|---|---|"]
     for cid in sorted(results):
-        r = results[cid]
-        for cv in list(r.get("coverage", [])):
-            if "explored by the bit-level search only" in cv and cv.count("(") == cv.count("explored by the bit-level"):
-                r["coverage"].remove(cv)
-                r.setdefault("limits", []).append("attacker callbacks searched by the bit-level engine only (its width): "
-                                                  + cv.split(": ", 1)[1].split(" (")[0])
-        v = r["verdict"]
-        proven = [n for n, x in r.get("proof", {}).items() if x == "proven"]
-        nrules = len(r.get("rules", {}))
-        touts = sorted({n for n, st in r.get("status", {}).items() if st and st[-1][1] == "timeout"})
-        real = {n: f for n, f in r.get("findings", {}).items() if tri.get((cid, n), ("?",))[0] == "real_bug"}
-        wrong = [n for n in r.get("findings", {}) if tri.get((cid, n), ("?",))[0] == "rule_wrong"]
-        pending = [n for n in r.get("findings", {}) if (cid, n) not in tri]
-        if real:
-            verdict = "BUGGY"
-            ev = "; ".join(f"`{n}`: " + " -> ".join(f["attack"]) + f" (triage: {tri[(cid, n)][1]})" for n, f in real.items())
-        elif v in ("UNSUPPORTED", "ERROR"):
-            verdict = v
-            ev = r.get("unsupported") or r.get("error") or ""
-        else:
-            depth = sorted({x[0] for st in r.get("status", {}).values() for x in st if x[1] == "clean"})
-            held = [n for n in r.get("rules", {}) if n not in r.get("findings", {})]
-            # a rule is covered at full width if the exact search found it clean, or it is proven
-            full = [n for n in held if r.get("proof", {}).get(n) == "proven" or
-                    any(x[0].startswith("exact") and x[1] == "clean" for x in r.get("status", {}).get(n, []))]
-            # a rule no engine covered: no proof and no clean search at all (timeouts, circuit attacks
-            # the EVM rejected, unsupported). One such rule leaves the case INCOMPLETE.
-            uncovered = [n for n in held if n not in full and
-                         not any(x[1] == "clean" for x in r.get("status", {}).get(n, []))]
-            if uncovered or r.get("coverage"):
-                verdict = "INCOMPLETE"
-            elif r.get("limits"):
-                verdict = "NO BUG FOUND WITHIN LIMITS"
-            elif len(full) == len(held) or not r.get("magnitude"):
-                verdict = "NO BUG FOUND"
-            else:
-                verdict = "NO BUG FOUND WITHIN LIMITS"
-            ev = (f"{nrules} rules; no real counterexample (searched {', '.join(depth) or 'nothing'}); "
-                  f"proven for all sizes: {len(proven)}/{nrules}")
-            if touts:
-                ev += f"; search timed out on {len(touts)}"
-            if uncovered:
-                ev += f"; not covered by any engine: {', '.join(uncovered)}"
-            if r.get("coverage"):
-                ev += "; coverage: " + "; ".join(r["coverage"])
-            if r.get("limits"):
-                ev += "; limits: " + "; ".join(r["limits"])
-            if r.get("magnitude"):
-                ev += f"; behaviour above the bit-level width: {', '.join(r['magnitude'])}; full-width (exact or proven) for {len(full)}/{len(held)} rules"
-        if r.get("unconfirmed"):  # circuit attacks the EVM rejected: the circuit is unreliable there
-            ev += "; bit-level attacks not reproduced on the EVM (rule kept open for the exact search and prover): " + \
-                  ", ".join(f"{n} ({next((x[1] for x in r['status'].get(n, []) if x[0].startswith('exact') or x[0] == 'proof'), 'no other engine')})"
-                            for n in r["unconfirmed"] if n not in r.get("findings", {}))
-        if wrong:
-            ev += f"; rule-writer errors (triaged rule_wrong): {', '.join(wrong)}"
-        if pending:
-            ev += f"; NOT YET TRIAGED: {', '.join(pending)}"
-        if r.get("diff"):
-            ev += f"; circuit vs EVM: {r['diff']['compared']} txs, {r['diff']['mismatches']} mismatches"
+        verdict, ev = classify(cid, results[cid], tri)
         lines.append(f"| {cid} | {verdict} | {ev.replace('|', '/')[:1500]} |")
     open(verdict_file(root), "w").write("\n".join(lines) + "\n")
 

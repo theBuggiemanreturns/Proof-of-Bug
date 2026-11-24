@@ -3,3 +3,4 @@ cache/
 gg-out/
 test/gg/
 __pycache__/
+private/

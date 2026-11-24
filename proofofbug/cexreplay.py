@@ -52,6 +52,8 @@ def replay_cex(m, cfg, rules, proof_details, log=print):
                 tx["value"] = call.get("callvalue", 0)
             trace = evm.run(cfg, cfg["tag"] + "_cex", [[tx]], m.watch)[0]
             hit = rule_on_trace(m, rules[name], [tx], trace)
+            from . import trail
+            trail.record("prover counterexample", "1tx from the deployed state", [name], [tx], trace, m, {name: hit})
             log(f"    {name} via {fname}: {'CONFIRMED on the EVM' if hit is not None else 'not reproducible from the deployed state'}")
             if hit is not None:
                 found[name] = {"attack": [fmt_tx(tx)], "source": "integer prover counterexample, replayed on the EVM"}

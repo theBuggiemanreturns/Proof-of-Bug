@@ -223,6 +223,8 @@ def _confirm_exact(m, cfg, rules, name, seq, k, found, status, log):
     from .bench import fmt_tx
     trace = evm.run(cfg, cfg["tag"] + "_exact", [seq], m.watch)[0]
     hit = rule_on_trace(m, rules[name], seq, trace)
+    from . import trail
+    trail.record("exact search", f"{k}tx at 256 bits", [name], seq, trace, m, {name: hit})
     if hit is None:  # the model and the chain disagree: report, never claim
         status[name].append((f"exact {k}tx", "not confirmed on the EVM"))
         log(f"    exact search: {name} at {k}tx NOT confirmed on the EVM (dropped)")

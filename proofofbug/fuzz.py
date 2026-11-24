@@ -104,7 +104,10 @@ def fuzz(m, cfg, rules, n=600, k=4, seed=0, log=print):
     seqs = sequences(m, n, k, seed)
     traces = evm.run(cfg, cfg["tag"] + "_fuzz", seqs, m.watch)
     found = {}
+    from . import trail
+    trail.note("fuzz", f"{k}tx", f"{len(seqs)} random sequences of {k} transactions run on the EVM, every rule checked after every transaction")
     for seq, tr in zip(seqs, traces):
+        new = {}
         for name, fn in rules.items():
             if name in found:
                 continue
@@ -115,5 +118,8 @@ def fuzz(m, cfg, rules, n=600, k=4, seed=0, log=print):
             if hit is not None:
                 found[name] = {"width": f"fuzz {k}tx", "attack": [fmt_tx(x) for x in seq[:hit + 1]],
                                "reverted": [not s["ok"] for s in tr["txs"][:hit + 1]], "source": "fuzzing on the EVM"}
+                new[name] = hit
                 log(f"    FINDING (fuzz) {name}: " + " -> ".join(found[name]["attack"]))
+        if new:
+            trail.record("fuzz", f"{k}tx on the EVM", list(new), seq, tr, m, new)
     return found
