@@ -23,8 +23,8 @@ import ast
 
 ALLOWED_FUNCS = {"pre", "post", "pre_sum", "post_sum", "arg", "called", "wide", "implies"}
 ALLOWED_NAMES = {"ok", "reverted", "sender", "ret", "to", "now", "u", "True", "False"}
-CONST_NAMES = {**{f"U{i}": 0x31 + i for i in range(8)}, **{f"A{i}": 0x99 - i for i in range(8)}}
-MAX_LEN = 600
+CONST_NAMES = {**{f"U{i}": 0x31 + i for i in range(8)}, **{f"A{i}": 0x99 - i for i in range(16)}}
+MAX_LEN = 1200  # a whole-system value (11 contracts) needs more than 600; still a whitelisted AST
 
 
 class RuleError(ValueError):

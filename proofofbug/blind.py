@@ -73,8 +73,12 @@ def apply_review(proposals, review):
     rules = [fixes.get(r["name"], r) for r in proposals.get("rules", []) if r["name"] not in drop]
     have = {r["name"] for r in rules}
     rules += [a for a in review.get("add", []) if a["name"] not in have]
-    return {"rules": rules, "invariants": proposals.get("invariants", []),
-            "review": {"dropped": sorted(drop), "fixed": sorted(fixes), "added": [a["name"] for a in review.get("add", [])]}}
+    invs = proposals.get("invariants", [])  # a drop may name an invariant too
+    kept_invs = [i for i in invs if i["name"] not in drop]
+    rev = {"dropped": sorted(drop), "fixed": sorted(fixes), "added": [a["name"] for a in review.get("add", [])]}
+    if len(kept_invs) < len(invs):
+        rev["dropped_invariants"] = sorted(i["name"] for i in invs if i["name"] in drop)
+    return {"rules": rules, "invariants": kept_invs, "review": rev}
 
 
 def deployment_note(case):
