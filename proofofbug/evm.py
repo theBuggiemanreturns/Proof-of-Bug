@@ -44,6 +44,7 @@ interface Vm {{
     function toString(bytes calldata) external pure returns (string memory);
     function toString(address) external pure returns (string memory);
     function parseBytes(string calldata) external pure returns (bytes memory);
+    function store(address, bytes32, bytes32) external;
 }}
 {attacker_src}
 contract GGRun_{tag} {{
