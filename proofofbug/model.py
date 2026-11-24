@@ -1,7 +1,8 @@
 """k-transaction model of one or more contracts, bug rules, and the SAT bug search."""
 from __future__ import annotations
 from .circuit import Circuit, FALSE, TRUE, TIMEOUT
-from .symexec import World, Code, Exec, TxEnv, Hook, Vals, mapping_slot, ETH_SLOT, eth_get, eth_move, eth_restore
+from .symexec import World, Code, Exec, TxEnv, Hook, Vals, mapping_slot, ETH_SLOT, eth_get, eth_move, eth_restore, \
+    make_choice, CHOICE_MAX
 
 SENDER_BASE = 0x31   # user u has address 0x31 + u (clear of the EVM precompile range)
 PRIMARY_ADDR = 0x99  # first contract; further contracts get 0x98, 0x97, ...
@@ -131,7 +132,10 @@ class Model:
         sbits = max(1, (users - 1).bit_length())
         self.maxargs = max([len(f[4]) for f in self.funcs] + [0])
         # some function takes a dynamic array (its calldata has offsets and lengths the solver chooses)
-        self.arrays = any(str(t).startswith("length:") for f in self.funcs for t in f[4])
+        self.arrays = any(str(t).startswith(("length:", "blength:", "offset:")) for f in self.funcs for t in f[4])
+        # word positions that carry raw bytes (bytes/string content): their top 4 bytes are inputs too
+        self.raw_pos = sorted({j for f in self.funcs for j, t in enumerate(f[4]) if t == "raw"})
+        self.length_cuts = set()  # functions run with fewer argument lengths than modelled (reported)
         self.out_pos, self.out_const = {}, {}
         valid = TRUE
         self.txs = []
@@ -154,6 +158,7 @@ class Model:
             for u in range(1, users):
                 caller = c.wmux(c.eq(sid, c.const_word(u, sbits)), c.const_word(self.user_addrs[u], W), caller)
             args = [c.new_input(f"tx{i}.arg{j}", W) for j in range(self.maxargs)]
+            his = {j: c.new_input(f"tx{i}.arg{j}.hi", 32) for j in self.raw_pos}
             value = c.new_input(f"tx{i}.value", W) if self.payable else None
             w.hook, w.hook_fired = None, FALSE
             if self.attacker is not None:
@@ -175,11 +180,16 @@ class Model:
             called, reverted, ret, to = {}, FALSE, 0, 0
             for con, a in self.contracts:
                 onehot, cond, pay, cds = {}, FALSE, FALSE, 4 + 32 * self.maxargs
+                fn_args, fn_cds = {}, {}
                 for j, f in enumerate(self.funcs):
                     if f[0] != a:
                         continue
                     hit = c.eq(fn, c.const_word(j, fbits))
                     onehot[f[3]] = hit
+                    variants, ok = self._call_words(f, args, his)
+                    if variants is not None:  # dynamic arguments: this function's own calldata, per variant
+                        fn_args[f[3]], fn_cds[f[3]] = variants, 4 + 32 * len(f[4])
+                        valid = c.and_(valid, c.or_(c.not_(hit), ok))
                     if self.arrays:  # exact calldata: this call's own size, the words past it are 0 (as on the EVM)
                         cds = self.vals.mux(hit, 4 + 32 * len(f[4]), cds)
                         for k_ in range(len(f[4]), self.maxargs):
@@ -203,7 +213,7 @@ class Model:
                         eth_move(self.vals, w, c.and_(cond, self.vals.eq(caller, u)), u, a, cv)
                 env = TxEnv(onehot, args, caller, calldatasize=cds,
                             timestamp=now if self.uses_time else 1, callvalue=cv,
-                            number=blk if self.uses_number else 1)
+                            number=blk if self.uses_number else 1, fn_args=fn_args or None, fn_cds=fn_cds or None)
                 ex = Exec(w, a, env, depth=0, pc0=cond).run()
                 if before:
                     eth_restore(self.vals, w, c.and_(cond, ex.reverted), before)
@@ -338,11 +348,64 @@ class Model:
     def nargs_of(self, sel):
         return next(len(f[4]) for f in self.funcs if f[3] == sel)
 
+    VARIANTS_MAX = 64  # most length combinations one function is run with (fewer lengths beyond: reported)
+    # which lengths to give up first when a function has too many combinations (most common kept)
+    _KEEP_ORDER = {"length": (1, 0, 2, 3), "blength": (36, 0, 4, 68, 32)}
+
+    def _call_words(self, f, args, his):
+        """The calldata of a call whose arguments include dynamic types (see yul.calldata_words), as
+        variants [(condition, words)]: one per combination of the lengths it is sent with, each with every
+        offset and length a known number (the function body then runs once per variant, as separate
+        branches, so nothing downstream is a computed size). Raw bytes words are the low W bits and the
+        top 4 bytes. `ok` says the inputs are one of the variants. None if no argument is dynamic."""
+        import itertools
+        types = f[4]
+        if not any(str(t).startswith(("offset:", "length:", "blength:")) or t == "raw" for t in types):
+            return None, TRUE
+        c = self.c
+        slots = []  # (position, allowed lengths)
+        for j, t in enumerate(types):
+            t = str(t)
+            if t.startswith("length:"):
+                slots.append((j, "length", list(range(int(t[7:]) + 1))))
+            elif t.startswith("blength:"):
+                slots.append((j, "blength", [int(x) for x in t[8:].split(",")]))
+        n = 1
+        for _, _, vs in slots:
+            n *= len(vs)
+        while n > self.VARIANTS_MAX:  # give up the least common length of the slot with the most
+            j, kind, vs = max(slots, key=lambda s: len(s[2]))
+            order = [v for v in self._KEEP_ORDER[kind] if v in vs] + [v for v in vs if v not in self._KEEP_ORDER[kind]]
+            vs.remove(order[-1])
+            n = n // (len(vs) + 1) * len(vs)
+            self.length_cuts.add(f"{f[2]}: argument lengths limited to {sorted(vs)}")
+        base = []
+        for j, t in enumerate(types):
+            t = str(t)
+            if t.startswith("offset:"):
+                base.append(int(t[7:]))
+            elif t == "raw":
+                d = {p: b for p, b in enumerate(args[j]) if b != FALSE}
+                d.update({224 + q: b for q, b in enumerate(his[j]) if b != FALSE})
+                base.append(self.vals.norm(d))
+            else:
+                base.append(args[j])
+        variants = []
+        for pick in itertools.product(*[vs for _, _, vs in slots]):
+            words, cond = list(base), TRUE
+            for (j, _, _), v in zip(slots, pick):
+                words[j] = v
+                cond = c.and_(cond, self.vals.eq(args[j], v))
+            variants.append((cond, words))
+        return variants, c.any_([cc for cc, _ in variants])
+
     def evm_arg(self, t, v):
         """The 256-bit value the EVM receives for a W-bit circuit input. The circuit is a W-bit EVM:
         its negative numbers (top bit set) are the chain's negative numbers, so a signed ABI type is
         sign-extended; everything else is zero-extended (as before)."""
         t = str(t)
+        if t.startswith("offset:"):  # a known offset: the model always sends exactly this
+            return int(t[7:])
         if t.startswith("int") and v >> (self.W - 1) & 1:
             return (v - (1 << self.W)) % (1 << 256)
         return v
@@ -354,7 +417,9 @@ class Model:
             tx = {"to": a, "fn": name, "sig": sig, "selector": sel,
                   "contract": next(con.name for con, ad in self.contracts if ad == a) if a != self.contracts[0][1] else None,
                   "sender": self.user_addrs[assign[f"tx{i}.sender"]],
-                  "args": [self.evm_arg(t, assign[f"tx{i}.arg{j}"]) for j, t in enumerate(types)], "hook": None}
+                  "args": [self.evm_arg(t, assign[f"tx{i}.arg{j}"]) | (assign.get(f"tx{i}.arg{j}.hi", 0) << 224
+                                                                        if t == "raw" else 0)
+                           for j, t in enumerate(types)], "hook": None}
             if self.uses_time:
                 now += assign[f"tx{i}.dt"]
                 tx["time"] = now

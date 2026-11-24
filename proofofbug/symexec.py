@@ -74,6 +74,76 @@ class Selector:
     pass
 
 
+CHOICE_MAX = 32  # most options a Choice keeps; past that the value is an ordinary circuit value
+
+
+@dataclass(eq=False)
+class Choice:
+    """A value that is one of a few known constants: [(condition, int)], the conditions mutually exclusive
+    and covering every path on which the value exists. It arises where branches that computed different
+    constants join (a length, an offset, the free memory pointer, a return size). Memory, copies, hashes,
+    calls and returns then act once per option under its condition (Exec.builtin), so a length or address
+    that is "5 or 7" is never treated as an unknown number; everything else sees the exact circuit value
+    (Vals.as_dict). The same idea as SymSlot, for numbers."""
+    options: list  # [(condition, int, source)]: source = ((source id, value), ...) it was computed from
+    bits: dict = None  # the circuit value, built once when first needed
+
+
+_SOURCES = [0]
+
+
+def new_source(c, conds):
+    """A Choice that is an input of its own (e.g. a bytes length): [(condition, value)]. Its options
+    remember the source, so values computed from the same source are combined consistently (a pointer and
+    a size that both follow one length are not 'any pointer with any size')."""
+    _SOURCES[0] += 1
+    sid = _SOURCES[0]
+    return make_choice(c, [(cond, v, ((sid, v),)) for cond, v in conds])
+
+
+def _merge_src(a, b):
+    d = dict(a)
+    for k, v in b:
+        if d.get(k, v) != v:
+            return None  # two different values of one source: this combination cannot happen
+        d[k] = v
+    return tuple(sorted(d.items()))
+
+
+def choice_opts(v):
+    """The options (condition, constant, source) of a constant or a Choice; None for any other value."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return [(TRUE, v, ())]
+    if isinstance(v, Choice):
+        return v.options
+    return None
+
+
+def make_choice(c, opts):
+    """Join (condition, constant[, source]) options into a constant, a Choice, or None when there are too
+    many. Options with the same constant merge: their conditions are or-ed, their sources keep what they
+    agree on."""
+    by = {}
+    for o in opts:
+        cond, x, src = o if len(o) == 3 else (o[0], o[1], ())
+        if cond == FALSE:
+            continue
+        if x in by:
+            c0, s0 = by[x]
+            by[x] = (c.or_(c0, cond), tuple(kv for kv in s0 if kv in src))
+        else:
+            by[x] = (cond, tuple(src))
+    if not by:
+        return 0
+    if len(by) == 1:  # every path that has the value has this one
+        return next(iter(by))
+    if len(by) > CHOICE_MAX:
+        return None
+    return Choice([(cond, x, src) for x, (cond, src) in by.items()])
+
+
 # ---------------------------------------------------------------- value layer
 ETH_SLOT = (1 << 256) - 1  # an account's ETH balance is kept as this pseudo storage slot
 
@@ -106,7 +176,7 @@ def eth_restore(vals, world, cond, before):
             st[ETH_SLOT] = vals.mux(cond, old, st.get(ETH_SLOT, 0))
 
 
-def copy_words(off, size, words, base=4):
+def copy_words(off, size, words, base=4, mask=None):
     """calldatacopy over word-structured calldata (selector, then 32-byte words): the words copied
     from byte offset `off`, `size` bytes, past the end reading 0, as on the EVM. Only word-aligned
     copies are modelled; a final partial word is copied only when it is a known number (its bytes
@@ -120,8 +190,11 @@ def copy_words(off, size, words, base=4):
     if rem:
         last = out[-1]
         if not isinstance(last, int):
-            raise Unsupported("calldatacopy of a partial word with a computed value")
-        out[-1] = last >> (8 * (32 - rem)) << (8 * (32 - rem))
+            if mask is None:
+                raise Unsupported("calldatacopy of a partial word with a computed value")
+            out[-1] = mask(last, rem)  # its first `rem` bytes, the rest cleared
+        else:
+            out[-1] = last >> (8 * (32 - rem)) << (8 * (32 - rem))
     return out
 
 
@@ -151,6 +224,12 @@ class Vals:
     def as_dict(self, v):
         if isinstance(v, int):
             return {p: TRUE for p in range(v.bit_length()) if (v >> p) & 1}
+        if isinstance(v, Choice):  # exact: exactly one option's condition holds
+            if v.bits is None:
+                top = max(x.bit_length() for _, x, _ in v.options)
+                v.bits = {p: s for p in range(top)
+                          if (s := self.c.any_([cond for cond, x, _ in v.options if (x >> p) & 1])) != FALSE}
+            return v.bits
         if isinstance(v, list):
             return {i: b for i, b in enumerate(v) if b != FALSE}
         if isinstance(v, dict):
@@ -193,6 +272,13 @@ class Vals:
             return a
         if isinstance(a, SymSlot) or isinstance(b, SymSlot):
             return a  # a hashed slot is only meaningful on the path that computed it
+        oa, ob = choice_opts(a), choice_opts(b)
+        if oa is not None and ob is not None:  # known constants on both sides: keep them known
+            ns = self.c.not_(s)
+            ch = make_choice(self.c, [(self.c.and_(s, cc), x, sr) for cc, x, sr in oa] +
+                             [(self.c.and_(ns, cc), x, sr) for cc, x, sr in ob])
+            if ch is not None:
+                return ch
         if isinstance(a, list) and isinstance(b, list):
             return self.c.wmux(s, a, b)
         da, db = self.as_dict(a), self.as_dict(b)
@@ -302,6 +388,8 @@ class TxEnv:
     timestamp: object = 0
     number: object = 1  # block.number: a clock like the timestamp (each transaction may advance it)
     origin: object = None  # tx.origin: the transaction's sender (None: this frame's caller is it)
+    fn_args: dict = None  # selector -> that function's own calldata words (dynamic arguments laid out)
+    fn_cds: dict = None  # selector -> that function's calldata size
 
 
 # The chain every model and every replay runs on (Foundry's default chain id): block.chainid is this
@@ -378,6 +466,9 @@ class Exec(Vals):
         self.code = world.codes[address]
         self.depth, self.static = depth, static
         self.memory, self.memraw = {}, {}
+        self.enum_depth = 0  # > 0 while a builtin runs once per option of a Choice (see _per_option)
+        self.opt = TRUE  # that option's condition: part of every local guard (TRUE otherwise)
+        self.cur_args, self.cur_cds = None, None  # inside a function with its own calldata words
         self.gate = pc0  # "this frame runs at all": applied to storage writes and global flags only
         self.pc = [TRUE]  # path condition inside this frame; frame flags (reverted...) are relative to it
         self.halted = self.reverted = self.leave = self.brk = self.cont = FALSE
@@ -402,7 +493,8 @@ class Exec(Vals):
         state (flags, memory, variables) is merged with the branch condition where branches
         rejoin, so the condition itself is not repeated here."""
         c = self.c
-        return c.not_(c.or_(c.or_(c.or_(self.halted, self.leave), c.or_(self.brk, self.cont)), self.outer_dead))
+        return c.and_(self.opt, c.not_(c.or_(c.or_(c.or_(self.halted, self.leave), c.or_(self.brk, self.cont)),
+                                             self.outer_dead)))
 
     def guard(self):
         """Guard for frame-local state (memory, variables, return-data registers).
@@ -411,7 +503,7 @@ class Exec(Vals):
         c = self.c
         # not outer_dead: where the caller has already left, it never reads this frame's local values,
         # so local writes need no guard there (reverts and storage writes do: see local_active)
-        return c.not_(c.or_(self.leave, c.or_(self.brk, self.cont)))
+        return c.and_(self.opt, c.not_(c.or_(self.leave, c.or_(self.brk, self.cont))))
 
     def snapshot(self, scope):
         scopes, s = [], scope
@@ -450,10 +542,12 @@ class Exec(Vals):
             for a in set(mem) | set(st["mem"]):
                 b, n = mem.get(a, 0), st["mem"].get(a, 0)
                 if n is not b:
-                    if a == 0x40 and isinstance(n, int) and isinstance(b, int):
-                        # free memory pointer: two constant positions join to the larger one. Solidity
-                        # never reads unwritten memory past it, so results are unchanged (only gas is)
-                        mem[a] = max(n, b)
+                    on, ob = choice_opts(n), choice_opts(b)
+                    if a == 0x40 and on is not None and ob is not None:
+                        # free memory pointer: known positions (constants or choices of them) join to the
+                        # largest. Solidity never reads unwritten memory past it, so results are unchanged
+                        # (only gas is), and later allocations stay at known addresses
+                        mem[a] = max(x for _, x, _ in on + ob)
                     else:
                         mem[a] = self.mux(cond, n, b)
         self.memory = mem
@@ -610,15 +704,30 @@ class Exec(Vals):
         for (cond, body), case in zip(cases, st["cases"]):
             if cond == FALSE:
                 continue
-            self.restore(snap)
-            try:
-                self.with_pc(cond, lambda b=body: self.block(b, f))
-            except Unsupported as ex:
-                # name the entry point that reached it, so that one function can be left out (bench.build)
-                if entry and case["value"] != "default" and getattr(ex, "entry", None) is None:
-                    ex.entry = (self.address, self.literal(case["value"]))
-                raise
-            branches.append((cond, self.capture(snap)))
+            # a function with dynamic arguments runs once per variant of its calldata (each with known
+            # offsets and lengths), as separate branches of this switch: the merge below joins them
+            runs = [(cond, None)]
+            if isinstance(e, Selector) and self.env.fn_args and case["value"] != "default":
+                own = self.env.fn_args.get(self.literal(case["value"]))
+                if own is not None:
+                    runs = [(self.c.and_(cond, vc), words) for vc, words in own]
+            for rc, words in runs:
+                if rc == FALSE:
+                    continue
+                self.restore(snap)
+                saved_cd = (self.cur_args, self.cur_cds)
+                if words is not None:
+                    self.cur_args, self.cur_cds = words, self.env.fn_cds[self.literal(case["value"])]
+                try:
+                    self.with_pc(rc, lambda b=body: self.block(b, f))
+                except Unsupported as ex:
+                    # name the entry point that reached it, so that one function can be left out (bench.build)
+                    if entry and case["value"] != "default" and getattr(ex, "entry", None) is None:
+                        ex.entry = (self.address, self.literal(case["value"]))
+                    raise
+                finally:
+                    self.cur_args, self.cur_cds = saved_cd
+                branches.append((rc, self.capture(snap)))
         if len(branches) == 1 and branches[0][0] == TRUE:
             return
         self.restore(snap)
@@ -761,12 +870,126 @@ class Exec(Vals):
         return [fr.vars[r] for r in rets]
 
     # ---------- builtins ----------
+    # where a builtin needs a known number (an address, offset or size), by argument position
+    PLACES = {"mload": (0,), "mstore": (0,), "mstore8": (0,), "calldatacopy": (0, 1, 2),
+              "returndatacopy": (0, 1, 2), "mcopy": (0, 1, 2), "codecopy": (0, 1, 2), "keccak256": (0, 1),
+              "return": (0, 1), "call": (3, 4, 5, 6), "staticcall": (2, 3, 4, 5), "delegatecall": (2, 3, 4, 5),
+              "sload": (0,), "sstore": (0,), "tload": (0,), "tstore": (0,), "calldataload": (0,)}
+
+    # memory ranges each builtin touches: (offset index, size index or a fixed size)
+    RANGES = {"mload": [(0, 32)], "mstore": [(0, 32)], "mstore8": [(0, 1)], "keccak256": [(0, "1")],
+              "calldatacopy": [(0, "2")], "returndatacopy": [(0, "2")], "codecopy": [(0, "2")],
+              "mcopy": [(0, "2"), (1, "2")], "return": [(0, "1")], "revert": [(0, "1")],
+              "call": [(3, "4"), (5, "6")], "staticcall": [(2, "3"), (4, "5")], "delegatecall": [(2, "3"), (4, "5")],
+              "log0": [(0, "1")], "log1": [(0, "1")], "log2": [(0, "1")], "log3": [(0, "1")], "log4": [(0, "1")]}
+    MEMORY_LIMIT = 1 << 24  # 16 MB: memory expansion past this costs far more than a block's gas
+
+    def _out_of_gas(self, name, a):
+        for oi, si in self.RANGES[name]:
+            off = a[oi] if oi < len(a) else 0
+            size = a[int(si)] if isinstance(si, str) and int(si) < len(a) else si
+            if isinstance(off, int) and isinstance(size, int) and size > 0 and off + size > self.MEMORY_LIMIT:
+                return True
+        return False
+
+    def _combos(self, a, places):
+        """Every consistent combination of the options of the Choice arguments at these places, with its
+        condition and source (None if there are none, or too many). Combinations that give one source two
+        values are impossible and left out."""
+        import itertools
+        cols = [choice_opts(a[i]) if i < len(a) and isinstance(a[i], Choice) else None for i in places]
+        if not any(cols):
+            return None
+        sets = [col if col else [(TRUE, a[i], ())] for i, col in zip(places, cols)]
+        out = []
+        for pick in itertools.product(*sets):
+            src = ()
+            for _, _, sr in pick:
+                src = _merge_src(src, sr)
+                if src is None:
+                    break
+            if src is None:
+                continue
+            cond = TRUE
+            for cc, _, _ in pick:
+                cond = self.c.and_(cond, cc)
+            if cond == FALSE:
+                continue
+            args = list(a)
+            for i, (_, x, _) in zip(places, pick):
+                args[i] = x
+            out.append((cond, args, src))
+            if len(out) > 4 * CHOICE_MAX:
+                return None
+        return out
+
+    def _per_option(self, name, combos):
+        """Run a builtin once per option, each under its condition; join what it returns."""
+        rets, rds = [], []
+        saved = self.opt
+        self.enum_depth += 1
+        try:
+            for cond, args, _ in combos:
+                # the option's condition joins every guard: memory writes, returns, halts, storage, calls
+                self.opt = self.c.and_(saved, cond)
+                if self.opt == FALSE:
+                    continue
+                rd0 = (self.rd_words, self.rd_size)
+                rets.append((cond, self.builtin(name, args)))
+                rds.append((cond, self.rd_words, self.rd_size))
+                if name in ("call", "staticcall", "delegatecall"):
+                    self.rd_words, self.rd_size = rd0  # each option starts from the same return data
+        finally:
+            self.opt = saved
+            self.enum_depth -= 1
+        if not rets:
+            return 0
+        if name in ("call", "staticcall", "delegatecall"):  # each option's return data, under its condition
+            (_, words, size) = rds[-1]
+            for cond, w_, s_ in rds[-2::-1]:
+                n = max(len(words), len(w_))
+                words = [self.mux(cond, w_[i] if i < len(w_) else 0, words[i] if i < len(words) else 0)
+                         for i in range(n)]
+                size = self.mux(cond, s_, size)
+            self.rd_words, self.rd_size = words, size
+        if name == "keccak256":  # one hashed slot per option: a SymSlot over all of them
+            opts = []
+            for cond, r in rets:
+                if isinstance(r, SymSlot):
+                    opts += [(self.c.and_(cond, c2), sl) for c2, sl in r.options]
+                else:
+                    opts.append((cond, r))
+            return SymSlot([(cc, sl) for cc, sl in opts if cc != FALSE])
+        acc = rets[-1][1]
+        for cond, r in rets[-2::-1]:
+            acc = self.mux(cond, r, acc)
+        return acc
+
     def builtin(self, name, a):
         c = self.c
         if name in CONST_OPS and all(isinstance(x, int) for x in a):
             return CONST_OPS[name](*a)
         if name in CONST_UNARY and isinstance(a[0], int):
             return CONST_UNARY[name](a[0])
+        if (name in CONST_OPS or name in CONST_UNARY) and any(isinstance(x, Choice) for x in a) \
+                and all(choice_opts(x) is not None for x in a):
+            # arithmetic on known constants stays known: once per combination of options
+            combos = self._combos(a, tuple(range(len(a))))
+            if combos is not None:
+                f = CONST_OPS.get(name) or CONST_UNARY[name]
+                ch = make_choice(c, [(cond, f(*args), src) for cond, args, src in combos])
+                if ch is not None:
+                    return ch
+        if name in self.PLACES:
+            combos = self._combos(a, self.PLACES[name])
+            if combos is not None:
+                return self._per_option(name, combos)
+        if name in self.RANGES and self._out_of_gas(name, a):
+            # memory this far out costs more gas than any block holds: the transaction runs out of gas
+            la = self.local_active
+            self.reverted = c.or_(self.reverted, la)
+            self.halted = c.or_(self.halted, la)
+            return 0
         if name == "memoryguard":
             return a[0]
         if name == "pop":
@@ -847,7 +1070,7 @@ class Exec(Vals):
         # ----- environment -----
         if name == "callvalue": return self.env.callvalue
         if name == "caller": return self.env.caller
-        if name == "calldatasize": return self.env.calldatasize
+        if name == "calldatasize": return self.cur_cds if self.cur_cds is not None else self.env.calldatasize
         if name == "timestamp": return self.env.timestamp
         if name == "number": return self.env.number
         if name == "chainid": return CHAIN_ID
@@ -874,17 +1097,19 @@ class Exec(Vals):
                 # the end; a read inside the calldata that is not one of its words (unaligned, or over
                 # the selector) is not modelled: such paths are left out (width-artefact rule)
                 c, acc, hit = self.c, 0, FALSE
-                for i, wd in enumerate(self.env.args):
+                for i, wd in enumerate(self.calldata_words()):
                     h = self.eq(off, 4 + 32 * i)
                     acc = self.mux(h, wd, acc)
                     hit = c.or_(hit, h)
-                odd = c.and_(self.ult(off, self.env.calldatasize), c.not_(hit))
+                odd = c.and_(self.ult(off, self.cur_cds if self.cur_cds is not None else self.env.calldatasize),
+                             c.not_(hit))
                 self.world.flag(c.and_(self.active, odd))
                 return acc
             if off < 4 or (off - 4) % 32:
                 raise Unsupported("calldataload at an unaligned offset")
             i = (off - 4) // 32
-            return self.env.args[i] if i < len(self.env.args) else 0
+            cd = self.calldata_words()
+            return cd[i] if i < len(cd) else 0
         if name == "extcodesize":
             has = FALSE
             for addr in list(self.world.codes) + sorted(self.world.attackers):
@@ -944,16 +1169,25 @@ class Exec(Vals):
             dst, off, size = a
             if not all(isinstance(x, int) for x in (dst, off, size)):
                 raise Unsupported("calldatacopy with computed arguments")
-            for i, w_ in enumerate(copy_words(off, size, self.env.args, base=4)):
-                self._mstore(dst + 32 * i, w_)
+            keep = lambda v, rem: v  # the whole source word: _partial_store keeps only its first rem bytes
+            ws = copy_words(off, size, self.calldata_words(), base=4, mask=keep)
+            for i, w_ in enumerate(ws):
+                if i == len(ws) - 1 and size % 32:
+                    self._partial_store(dst + 32 * i, w_, size % 32)
+                else:
+                    self._mstore(dst + 32 * i, w_)
             return 0
         if name == "mcopy":
             dst, src, size = a
-            if not all(isinstance(x, int) for x in (dst, src, size)) or size % 32:
-                raise Unsupported("mcopy with computed or partial-word arguments")
-            words = [self.memraw.get(src + 32 * i, self.memory.get(src + 32 * i, 0)) for i in range(size // 32)]
+            if not all(isinstance(x, int) for x in (dst, src, size)):
+                raise Unsupported("mcopy with computed arguments")
+            n = (size + 31) // 32
+            words = [self.memraw.get(src + 32 * i, self.memory.get(src + 32 * i, 0)) for i in range(n)]
             for i, w_ in enumerate(words):
-                self._mstore(dst + 32 * i, w_)
+                if i == n - 1 and size % 32:
+                    self._partial_store(dst + 32 * i, w_, size % 32)
+                else:
+                    self._mstore(dst + 32 * i, w_)
             return 0
         if name in ("log0", "log1", "log2", "log3", "log4"):
             return 0  # events change no state
@@ -1012,7 +1246,32 @@ class Exec(Vals):
             act = self.local_active
             self.panics["wrap"] = self.c.or_(self.panics.get("wrap", FALSE), self.c.and_(act, sig))
 
+    def _partial_store(self, addr, v, rem):
+        """Write the first `rem` bytes of v at addr: the rest of that memory word keeps what it held
+        (the EVM copies exactly the bytes asked for)."""
+        if isinstance(v, (SymSlot, Selector)):
+            raise Unsupported("a hashed slot copied in part")
+        cut = 8 * (32 - rem)  # bit positions >= cut are the first rem bytes
+        old = self.memory.get(addr, 0)
+        if isinstance(old, SymSlot):
+            old = 0
+        dv, do = self.as_dict(v), self.as_dict(old)
+        self._mstore(addr, self.norm({**{p: s for p, s in do.items() if p < cut},
+                                      **{p: s for p, s in dv.items() if p >= cut}}))
+
+    def calldata_words(self):
+        return self.cur_args if self.cur_args is not None else self.env.args
+
     def _mstore(self, addr, v):
+        if self.enum_depth:
+            # one option of a computed address: a guarded write. The raw (unguarded) record that hashing
+            # reads first must not keep a value another option wrote
+            if isinstance(v, (SymSlot, Selector)):
+                raise Unsupported("a hashed slot stored at a computed memory address")
+            self.memraw.pop(addr, None)
+            old = self.memory.get(addr, 0)
+            self.memory[addr] = self.mux(self.guard(), v, 0 if isinstance(old, SymSlot) else old)
+            return
         self.memraw[addr] = v
         if isinstance(v, SymSlot):
             self.memory.pop(addr, None)

@@ -59,6 +59,14 @@ def sequences(m, n, k, seed=0):
         if t.startswith("length:"):  # an array's length: within the words sent, sometimes past them
             n_ = int(t[7:])
             return rnd.randint(0, n_) if rnd.random() < 0.9 else rnd.choice([n_ + 1, rnd.randrange(1 << 256)])
+        if t.startswith("blength:"):  # bytes/string: one of the modelled lengths, sometimes another
+            ls = [int(x) for x in t[8:].split(",")]
+            return rnd.choice(ls) if rnd.random() < 0.9 else rnd.randint(0, 32 * (len(ls) + 1))
+        if t == "raw":  # raw bytes: a selector of some function in front, a value, or anything
+            r = rnd.random()
+            if r < 0.4:
+                return (rnd.choice(m.funcs)[3] << 224) | rnd.choice(small)
+            return rnd.choice(vals) if r < 0.7 else rnd.randrange(1 << 256)
         if t == "address":
             return rnd.choice(m.key_universe)
         if t == "bool":

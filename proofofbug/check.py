@@ -112,11 +112,15 @@ def random_sequences(model, n, seed=1):
     def amount():
         return rnd.choice([rnd.randint(0, M), rnd.randint(0, 20), rnd.randint(0, 3), M, M - 1])
     def arg(types, j):
-        t = types[j] if j < len(types) else ""
+        if j >= len(types):
+            return 0  # past this call's own words: nothing is sent there (the model requires 0)
+        t = types[j]
         if t.startswith("offset:") and rnd.random() < 0.8:
             return int(t[7:]) % (M + 1)
         if t.startswith("length:") and rnd.random() < 0.8:
             return rnd.randint(0, int(t[7:]) + 1)
+        if t.startswith("blength:") and rnd.random() < 0.9:  # one of the allowed byte lengths
+            return rnd.choice([int(x) for x in t[8:].split(",")])
         if j < len(types) and types[j] == "address" and rnd.random() < 0.9:
             return rnd.choice([k for k in model.key_universe if k < 1 << model.W])  # addresses the circuit can hold
         if j < len(types) and types[j] == "bool":
@@ -133,8 +137,13 @@ def random_sequences(model, n, seed=1):
             a[f"tx{i}.fn"], a[f"tx{i}.sender"] = fi, u
             for j, v in enumerate(args):
                 a[f"tx{i}.arg{j}"] = v
+            his = {}
+            for j in getattr(model, "raw_pos", []):  # raw bytes words: their top 4 bytes (a selector, often)
+                his[j] = rnd.choice([0, rnd.randrange(1 << 32)] + [f[3] for f in model.funcs][:4])
+                a[f"tx{i}.arg{j}.hi"] = his[j]
             tx = {"to": to, "fn": name, "sig": sig, "selector": sel, "sender": model.user_addrs[u],
-                  "args": [model.evm_arg(t, v) for t, v in zip(types, args)], "hook": None}
+                  "args": [model.evm_arg(t, v) | (his.get(j, 0) << 224 if t == "raw" else 0)
+                           for j, (t, v) in enumerate(zip(types, args))], "hook": None}
             if model.attacker is not None and rnd.random() < 0.5:
                 hj = rnd.randrange(len(model.hook_sels))
                 hs = model.hook_sels[hj]

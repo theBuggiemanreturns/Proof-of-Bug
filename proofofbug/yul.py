@@ -127,28 +127,50 @@ ARRAY_MAX = 3  # a dynamic array argument holds at most this many elements (a se
 _STATIC = re.compile(r"^(u?int\d*|address|bool|bytes([1-9]|[12]\d|3[012]))$")
 
 
-def calldata_words(types):
-    """The calldata words (after the selector) of a call with these ABI parameter types, as word types.
-    Static values take one word each; a fixed array T[n] takes n words; a dynamic array T[] of a static
-    T takes a head word "offset:<canonical offset>" and, after all heads, a tail: "length:<ARRAY_MAX>"
-    then ARRAY_MAX words of T. The solver chooses every word (offsets and lengths too); the contract's
-    own ABI decoder checks them, as on the chain. Other dynamic types (bytes, string, nested arrays,
-    structs) are kept as one word and the engines raise Unsupported when the code reads them."""
+# A bytes/string argument is one of these lengths (a search and proof limit, reported like ARRAY_MAX):
+# empty, a bare selector, one word, a selector and one word, a selector and two words.
+BYTES_LENGTHS = (0, 4, 32, 36, 68)
+
+
+def _dynamic_tail(t):
+    """The tail words of a dynamic type, offsets relative to the start of that tail's own block."""
+    if t in ("bytes", "string"):
+        return [f"blength:{','.join(map(str, BYTES_LENGTHS))}"] + ["raw"] * ((max(BYTES_LENGTHS) + 31) // 32)
+    m = re.fullmatch(r"(.+)\[(\d*)\]", t)
+    if m and not m.group(2):  # T[]: a length, then ARRAY_MAX elements laid out like a tuple of them
+        return [f"length:{ARRAY_MAX}"] + _block([m.group(1)] * ARRAY_MAX)
+    if m:  # T[k] with a dynamic T
+        return _block([m.group(1)] * int(m.group(2)))
+    if t.startswith("(") and t.endswith(")"):
+        return _block(_split_top(t[1:-1]))
+    raise ValueError(f"not a dynamic ABI type: {t}")
+
+
+def _block(types):
+    """One ABI encoding block (a call's arguments, a struct, an array's elements): static members inline,
+    each dynamic member a head word "offset:<bytes from the block start>" and its tail after all heads.
+    Every tail has a fixed place (its longest form), so every offset is a known number; a shorter value
+    leaves unused words, which the ABI allows and every decoder accepts."""
     heads, tails = [], []
-    for t in types:
-        m = re.fullmatch(r"(.+)\[(\d*)\]", t)
-        sw = _static_words(t)
-        if sw is not None:  # static: values, fixed arrays and structs of static members, inline
+    for ty in types:
+        sw = _static_words(ty)
+        if sw is not None:
             heads += sw
-        elif m and _STATIC.match(m.group(1)) and m.group(2):
-            heads += [m.group(1)] * int(m.group(2))
-        elif m and _STATIC.match(m.group(1)):
-            heads.append(("offset", len(tails)))
-            tails += ["length:%d" % ARRAY_MAX] + [m.group(1)] * ARRAY_MAX
         else:
-            heads.append(t)
+            heads.append(("offset", len(tails)))
+            tails += _dynamic_tail(ty)
     nh = len(heads)
     return [f"offset:{32 * (nh + h[1])}" if isinstance(h, tuple) else h for h in heads] + tails
+
+
+def calldata_words(types):
+    """The calldata words (after the selector) of a call with these ABI parameter types, as word types.
+    Static values take one word each; fixed arrays and structs of static members are inline. Every dynamic
+    argument (T[], bytes, string, structs with dynamic members, nested to any depth) is laid out with
+    known offsets ("offset:N", always N), a length chosen from a few values ("length:N" = 0..N elements,
+    "blength:a,b,..." = one of those byte lengths) and the content words ("raw" for bytes: a word whose low
+    W bits and top 4 bytes the solver chooses)."""
+    return _block(types)
 
 
 def compile_contract(path: str, name: str, root: str = ".") -> Contract:
