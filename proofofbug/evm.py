@@ -99,7 +99,9 @@ contract GGRun_{tag} {{
         // under prank the value comes out of the sender's own balance (as on a real chain); the user sends
         // the transaction itself, so it is also tx.origin
         vm.prank(sender, sender);
-        (bool ok, bytes memory r) = to.call{{value: value}}(cd);
+        // each transaction gets what a block allows (as on a chain: one that needs more fails); the runner keeps
+        // its own budget for snapshots, so one runaway call can never take the whole replay down
+        (bool ok, bytes memory r) = to.call{{gas: 30000000, value: value}}(cd);
         return (p, ok, r);
     }}
 
