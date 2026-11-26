@@ -85,6 +85,32 @@ def zi(v):
 OPTIONS_MAX = 32
 
 
+def z_options_rest(v, depth=0):
+    """(options, rest): options [(condition, constant)] and the condition `rest` (or None) under which the term
+    is none of them, for if-then-else trees whose leaves are numbers or other terms (the Z3 form of
+    symexec.Choice and its rest). None if the term has no constant option at all."""
+    if not isinstance(v, z3.ExprRef) or is_c(v) or z3.is_int_value(v) or depth > 12:
+        o = z_options(v, depth)
+        return (o, None) if o is not None else None
+    if z3.is_app_of(v, z3.Z3_OP_ITE):
+        c, a, b = v.children()
+        out, rests = [], []
+        for cond, sub_ in ((c, a), (z3.Not(c), b)):
+            r = z_options_rest(sub_, depth + 1)
+            if r is None:
+                rests.append(cond)  # this branch is an ordinary term: the rest
+                continue
+            o, rr = r
+            out += [(z3.And(cond, ca) if ca is not True else cond, x) for ca, x in o]
+            if rr is not None:
+                rests.append(z3.And(cond, rr))
+        if not out or len(out) > OPTIONS_MAX:
+            return None
+        return out, (z3.Or(*rests) if len(rests) > 1 else rests[0]) if rests else None
+    o = z_options(v, depth)
+    return (o, None) if o is not None else None
+
+
 def z_options(v, depth=0):
     """[(condition, constant)] when a term can only be one of a few constants (if-then-else trees with
     number leaves, and +, -, *, % of such terms): the Z3 form of symexec.Choice. None otherwise."""
@@ -362,6 +388,7 @@ class ZEnv:
 
 class ZWorld:
     def __init__(self, z, codes, storage, key_universe, max_depth=3, max_unroll=64):
+        self.rest_cuts = set()  # builtins where paths were left out (an address none of its known values)
         self.z, self.codes, self.storage = z, codes, storage
         self.key_universe = key_universe
         self.max_depth, self.max_unroll = max_depth, max_unroll
@@ -844,12 +871,22 @@ class ZExec:
         places = [i for i in self.PLACES[name] if i < len(a) and not is_c(a[i])]
         if not places:
             return None
-        cols = []
+        cols, rests = [], []
         for i in places:
-            o = z_options(a[i]) if not isinstance(a[i], (SymSlot, Selector)) else None
-            if o is None or len(o) < 2:
+            r = z_options_rest(a[i]) if not isinstance(a[i], (SymSlot, Selector)) else None
+            if r is None or (len(r[0]) < 2 and r[1] is None):
                 return None
-            cols.append(o)
+            cols.append(r[0])
+            if r[1] is not None:
+                rests.append(r[1])
+        if rests:
+            # an address or size that is none of its known values here (e.g. after a call that returned nothing):
+            # the search leaves those paths out (counted); a proof cannot, so it refuses
+            if not self.w.bounded_loops:
+                raise Unsupported(f"{name} at an address that is not one of its known values on some path")
+            rc = z3.Or(*rests) if len(rests) > 1 else rests[0]
+            self.w.assume.append(z.not_(z.and_(self.active, rc)))
+            self.w.rest_cuts.add(name)
         combos = []
         for pick in itertools.product(*cols):
             conds = [c for c, _ in pick if c is not True]

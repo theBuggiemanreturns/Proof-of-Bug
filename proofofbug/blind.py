@@ -200,6 +200,10 @@ def hunt_case(case, root, kept, invs, budget, depths, ladder, log):
                       "storage": {c.name: list(c.storage) for c, _ in m_small.contracts}}
     from .yul import ARRAY_MAX
     arr = sorted({f[2] for f in m_small.funcs if any(str(t).startswith("length:") for t in f[4])})
+    if m_small.world.rest_cuts:  # paths left out where an address or size was none of its known values
+        rec["limits"].append("paths on which a memory address or size is none of its known values (e.g. after a "
+                             "call that returned nothing) are left out of the searches: " +
+                             ", ".join(sorted(m_small.world.rest_cuts)))
     if arr:  # a bound on what the caller sends: searches AND proofs only cover arrays this short
         rec["limits"].append(f"array arguments of at most {ARRAY_MAX} elements ({', '.join(arr)})")
     t0 = time.time()

@@ -81,7 +81,8 @@ class Selector:
     pass
 
 
-CHOICE_MAX = 32  # most options a Choice keeps; past that the value is an ordinary circuit value
+CHOICE_MAX = 128  # most options a Choice keeps; past that the value is an ordinary circuit value (dead-path
+# combinations, e.g. a fee read as an offset on a path that reverts, push correlated values past 32)
 
 
 @dataclass(eq=False)
@@ -94,6 +95,14 @@ class Choice:
     (Vals.as_dict). The same idea as SymSlot, for numbers."""
     options: list  # [(condition, int, source)]: source = ((source id, value), ...) it was computed from
     bits: dict = None  # the circuit value, built once when first needed
+    # (condition, value): where the value is none of the constants, it is this ordinary value (e.g. what a
+    # call that returned nothing left in memory). Exact everywhere; a builtin that needs a known address or
+    # size leaves that region's paths out and counts them (World.rest_cuts), it never guesses there.
+    rest: tuple = None
+
+
+def choice_rest(v):
+    return v.rest if isinstance(v, Choice) else None
 
 
 _SOURCES = [0]
@@ -128,10 +137,12 @@ def choice_opts(v):
     return None
 
 
-def make_choice(c, opts):
+def make_choice(c, opts, rest=None):
     """Join (condition, constant[, source]) options into a constant, a Choice, or None when there are too
     many. Options with the same constant merge: their conditions are or-ed, their sources keep what they
-    agree on."""
+    agree on. `rest` = (condition, value) where it is none of them."""
+    if rest is not None and rest[0] == FALSE:
+        rest = None
     by = {}
     for o in opts:
         cond, x, src = o if len(o) == 3 else (o[0], o[1], ())
@@ -143,12 +154,12 @@ def make_choice(c, opts):
         else:
             by[x] = (cond, tuple(src))
     if not by:
-        return 0
-    if len(by) == 1:  # every path that has the value has this one
+        return rest[1] if rest is not None else 0
+    if len(by) == 1 and rest is None:  # every path that has the value has this one
         return next(iter(by))
     if len(by) > CHOICE_MAX:
         return None
-    return Choice([(cond, x, src) for x, (cond, src) in by.items()])
+    return Choice([(cond, x, src) for x, (cond, src) in by.items()], rest=rest)
 
 
 # ---------------------------------------------------------------- value layer
@@ -231,11 +242,15 @@ class Vals:
     def as_dict(self, v):
         if isinstance(v, int):
             return {p: TRUE for p in range(v.bit_length()) if (v >> p) & 1}
-        if isinstance(v, Choice):  # exact: exactly one option's condition holds
+        if isinstance(v, Choice):  # exact: exactly one option's condition (or the rest's) holds
             if v.bits is None:
                 top = max(x.bit_length() for _, x, _ in v.options)
-                v.bits = {p: s for p in range(top)
-                          if (s := self.c.any_([cond for cond, x, _ in v.options if (x >> p) & 1])) != FALSE}
+                bits = {p: [cond for cond, x, _ in v.options if (x >> p) & 1] for p in range(top)}
+                if v.rest is not None:
+                    rc, rv = v.rest
+                    for p, s in self.as_dict(rv).items():
+                        bits.setdefault(p, []).append(self.c.and_(rc, s))
+                v.bits = {p: s for p, ss in bits.items() if (s := self.c.any_(ss)) != FALSE}
             return v.bits
         if isinstance(v, list):
             return {i: b for i, b in enumerate(v) if b != FALSE}
@@ -270,7 +285,10 @@ class Vals:
     def bit(self, b):
         return b if b in (FALSE, TRUE) else [b] + [FALSE] * (self.W - 1)
 
-    def mux(self, s, a, b):
+    def mux(self, s, a, b, keep=False):
+        """s ? a : b. Known constants on both sides stay known (a Choice). With keep (memory and return
+        data, where offsets and pointers live), or when one side already is a Choice, a side that is an
+        ordinary value becomes the Choice's rest instead of turning the whole value into an unknown."""
         if s == TRUE:
             return a
         if s == FALSE:
@@ -280,12 +298,36 @@ class Vals:
         if isinstance(a, SymSlot) or isinstance(b, SymSlot):
             return a  # a hashed slot is only meaningful on the path that computed it
         oa, ob = choice_opts(a), choice_opts(b)
-        if oa is not None and ob is not None:  # known constants on both sides: keep them known
+        general = lambda v: isinstance(v, (list, dict))
+        if oa is not None or ob is not None:
             ns = self.c.not_(s)
-            ch = make_choice(self.c, [(self.c.and_(s, cc), x, sr) for cc, x, sr in oa] +
-                             [(self.c.and_(ns, cc), x, sr) for cc, x, sr in ob])
-            if ch is not None:
-                return ch
+            if oa is None and not ((keep or isinstance(b, Choice)) and general(a)):
+                oa = None
+            elif ob is None and not ((keep or isinstance(a, Choice)) and general(b)):
+                ob = None
+            else:
+                opts, rests = [], []
+                for side, cond, v, o in ((a, s, a, oa), (b, ns, b, ob)):
+                    if o is None:
+                        rests.append((cond, v))  # this whole side is an ordinary value
+                    else:
+                        opts += [(self.c.and_(cond, cc), x, sr) for cc, x, sr in o]
+                        r = choice_rest(v)
+                        if r is not None:
+                            rests.append((self.c.and_(cond, r[0]), r[1]))
+                rest = None
+                if len(rests) == 1:
+                    rest = rests[0]
+                elif len(rests) == 2:
+                    rest = (self.c.or_(rests[0][0], rests[1][0]), self._plain_mux(s, rests[0][1], rests[1][1]))
+                ch = make_choice(self.c, opts, rest)
+                if ch is not None:
+                    return ch
+        return self._plain_mux(s, a, b)
+
+    def _plain_mux(self, s, a, b):
+        if isinstance(a, int) and isinstance(b, int) and a == b:
+            return a
         if isinstance(a, list) and isinstance(b, list):
             return self.c.wmux(s, a, b)
         da, db = self.as_dict(a), self.as_dict(b)
@@ -429,6 +471,7 @@ class World:
         self.max_depth, self.max_unroll = max_depth, max_unroll
         self.artefact = FALSE  # width overflow, unroll limit, key outside universe, call depth
         self.unroll_hit = False  # some loop may run longer than max_unroll
+        self.rest_cuts = set()  # builtins where an address/size outside its known constants left paths out
         self.unroll_signals = []
         self.hook = None  # Hook for the current transaction
         self.hook_fired = FALSE
@@ -550,13 +593,14 @@ class Exec(Vals):
                 b, n = mem.get(a, 0), st["mem"].get(a, 0)
                 if n is not b:
                     on, ob = choice_opts(n), choice_opts(b)
-                    if a == 0x40 and on is not None and ob is not None:
+                    if a == 0x40 and on is not None and ob is not None and choice_rest(n) is None \
+                            and choice_rest(b) is None:
                         # free memory pointer: known positions (constants or choices of them) join to the
                         # largest. Solidity never reads unwritten memory past it, so results are unchanged
                         # (only gas is), and later allocations stay at known addresses
                         mem[a] = max(x for _, x, _ in on + ob)
                     else:
-                        mem[a] = self.mux(cond, n, b)
+                        mem[a] = self.mux(cond, n, b, keep=True)
         self.memory = mem
         for idx, (sc, old) in enumerate(snap["vars"]):
             cur = dict(old)
@@ -967,7 +1011,7 @@ class Exec(Vals):
             (_, words, size) = rds[-1]
             for cond, w_, s_ in rds[-2::-1]:
                 n = max(len(words), len(w_))
-                words = [self.mux(cond, w_[i] if i < len(w_) else 0, words[i] if i < len(words) else 0)
+                words = [self.mux(cond, w_[i] if i < len(w_) else 0, words[i] if i < len(words) else 0, keep=True)
                          for i in range(n)]
                 size = self.mux(cond, s_, size)
             self.rd_words, self.rd_size = words, size
@@ -981,7 +1025,7 @@ class Exec(Vals):
             return SymSlot([(cc, sl) for cc, sl in opts if cc != FALSE])
         acc = rets[-1][1]
         for cond, r in rets[-2::-1]:
-            acc = self.mux(cond, r, acc)
+            acc = self.mux(cond, r, acc, keep=True)
         return acc
 
     def builtin(self, name, a):
@@ -996,12 +1040,24 @@ class Exec(Vals):
             combos = self._combos(a, tuple(range(len(a))))
             if combos is not None:
                 f = CONST_OPS.get(name) or CONST_UNARY[name]
-                ch = make_choice(c, [(cond, f(*args), src) for cond, args, src in combos])
+                rests = [choice_rest(x) for x in a if choice_rest(x) is not None]
+                rest = None
+                if rests:  # where any argument is in its rest: the ordinary circuit, on the exact values
+                    rv = self.builtin(name, [self.norm(dict(self.as_dict(x))) if isinstance(x, Choice) else x for x in a])
+                    rest = (c.any_([r[0] for r in rests]), rv)
+                ch = make_choice(c, [(cond, f(*args), src) for cond, args, src in combos], rest)
                 if ch is not None:
                     return ch
         if name in self.PLACES:
             combos = self._combos(a, self.PLACES[name])
             if combos is not None:
+                rests = [choice_rest(a[i]) for i in self.PLACES[name] if i < len(a) and choice_rest(a[i]) is not None]
+                if rests:
+                    # an address or size that is none of its known constants here: the path is left out, as for a
+                    # mapping key outside the universe (counted and reported), never guessed
+                    rc = c.any_([r[0] for r in rests])
+                    self.world.flag(c.and_(self.active, rc))
+                    self.world.rest_cuts.add(name)
                 return self._per_option(name, combos)
         if name in self.RANGES and self._out_of_gas(name, a):
             # memory this far out costs more gas than any block holds: the transaction runs out of gas
@@ -1296,14 +1352,14 @@ class Exec(Vals):
                 raise Unsupported("a hashed slot stored at a computed memory address")
             self.memraw.pop(addr, None)
             old = self.memory.get(addr, 0)
-            self.memory[addr] = self.mux(self.guard(), v, 0 if isinstance(old, SymSlot) else old)
+            self.memory[addr] = self.mux(self.guard(), v, 0 if isinstance(old, SymSlot) else old, keep=True)
             return
         self.memraw[addr] = v
         if isinstance(v, SymSlot):
             self.memory.pop(addr, None)
         else:
             old = self.memory.get(addr, 0)
-            self.memory[addr] = self.mux(self.guard(), v, 0 if isinstance(old, SymSlot) else old)
+            self.memory[addr] = self.mux(self.guard(), v, 0 if isinstance(old, SymSlot) else old, keep=True)
 
     # ---------- calls between contracts ----------
     def ext_call(self, to, inp, insize, out, outsize, static, value=0):
@@ -1364,9 +1420,9 @@ class Exec(Vals):
                         Exec(w, self.address, env, self.depth + 2, pc0=fire).run()  # its failure is ignored
             success = c.or_(success, c.and_(c.and_(cond, enough), ok))
             n = max(len(rd_words), len(words))
-            rd_words = [self.mux(cond, words[i] if i < len(words) else 0, rd_words[i] if i < len(rd_words) else 0)
+            rd_words = [self.mux(cond, words[i] if i < len(words) else 0, rd_words[i] if i < len(rd_words) else 0, keep=True)
                         for i in range(n)]
-            rd_size = self.mux(cond, size, rd_size)
+            rd_size = self.mux(cond, size, rd_size, keep=True)
         # anything else is an account without code: the call succeeds and does nothing
         # (except receive the ETH sent: a known user gets it, anyone else takes it out of the world)
         nomatch = c.not_(matched)
