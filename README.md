@@ -166,6 +166,9 @@ On an 11-contract DeFi system the bit-level engine models all but 2 of 106 funct
 1. Each fix was checked against the real EVM (differential tests on the bytes-heavy survey contracts: 611
 transactions, 0 mismatches) and by the full benchmark and training-set regression.
 
+Planned (not built yet): every bound above and the machine limits become user settings, with auto-detection and
+presets, printed in every report: see `PLANNED_SETTINGS.md`.
+
 Size is the next wall for the bit-level engine: realistic balances (100 ether) need ~90-bit numbers, and an
 11-contract system at that width is tens of millions of gates. The search then skips the bit-level stage (reported
 as a coverage gap) and relies on the fuzzer, the exact 256-bit search and the prover.
