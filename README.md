@@ -140,6 +140,8 @@ before use; `euclid-bound` is applied automatically to divisions when a proof ti
 - `block.timestamp` and `block.number` are clocks that may move forward between transactions; `block.chainid` is
   the chain every replay runs on (31337); `tx.origin` is the transaction's sender.
 - Immutables come from the deployed code, including those a contract inherits.
+- A dynamic storage array element (`keccak(p) + i`, also inside mappings and structs) ranges over the first 16
+  slots of the array, as mapping keys range over the key universe; a path past them is flagged, not guessed.
 - A function the engines cannot model yet is left out by name with its reason (`bench.isolate` finds it in the
   exact model the search uses, at the deepest depth, before any rule is judged); it is a reported coverage gap,
   never a silent one.
@@ -154,11 +156,12 @@ model at 1-3 transactions, and lists every function it cannot model and why (`su
 | | functions left out |
 |---|---|
 | before the big-contract work (`survey/RESULTS_before_fixes.md`) | 23 of 101 |
-| now | 9 of 101 |
+| now | 6 of 101 |
 
 Fixed as classes, not instruction by instruction: inherited immutables, environment values, variable-size
-data, impossible far-out memory. Still open: storage arrays (vote checkpoints, `uint32[]` parameters), EIP-712
-hashing at unaligned memory offsets (and signatures need real keys anyway), `delegatecall`, `create`/`create2`.
+data, impossible far-out memory, storage arrays (elements at `keccak(p) + i` over 16 offsets, and every slot a
+value can occupy watched from the compiler's storage type tree). Still open: EIP-712 hashing at unaligned memory
+offsets (and signatures need real keys anyway), `delegatecall`, `create`/`create2`.
 On an 11-contract DeFi system the bit-level engine models all but 2 of 106 functions and the exact search all but
 1. Each fix was checked against the real EVM (differential tests on the bytes-heavy survey contracts: 611
 transactions, 0 mismatches) and by the full benchmark and training-set regression.
