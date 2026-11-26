@@ -6,7 +6,7 @@ Common OpenZeppelin 5.x building blocks (survey/src), built with the engine's ow
 |---|---|---|---|
 | SurveyToken | 8 | 0 |  |
 | SurveyPermitToken | 5 | 1 |  |
-| SurveyVotesToken | 7 | 5 |  |
+| SurveyVotesToken | 7 | 2 |  |
 | SurveyFlashToken | 5 | 0 |  |
 | SurveyCallToken | 10 | 0 |  |
 | SurveyMulticallToken | 5 | 1 |  |
@@ -24,11 +24,8 @@ Common OpenZeppelin 5.x building blocks (survey/src), built with the engine's ow
 | Function | First seen at | Why |
 |---|---|---|
 | `SurveyPermitToken.permit(address,address,uint256,uint256,uint8,bytes32,bytes32)` | 1 tx | keccak256 over a computed or unaligned memory range |
-| `SurveyVotesToken.delegate(address)` | 2 tx | arithmetic on a hashed storage slot |
 | `SurveyVotesToken.delegateBySig(address,uint256,uint256,uint8,bytes32,bytes32)` | 1 tx | keccak256 over a computed or unaligned memory range |
 | `SurveyVotesToken.permit(address,address,uint256,uint256,uint8,bytes32,bytes32)` | 1 tx | keccak256 over a computed or unaligned memory range |
-| `SurveyVotesToken.transfer(address,uint256)` | 1 tx | arithmetic on a hashed storage slot |
-| `SurveyVotesToken.transferFrom(address,address,uint256)` | 2 tx | arithmetic on a hashed storage slot |
 | `SurveyMulticallToken.multicall(bytes[])` | 1 tx | builtin delegatecall |
 | `SurveyCloneFactory.clone()` | 1 tx | builtin create |
 | `SurveyCloneFactory.cloneAt(bytes32)` | 1 tx | builtin create2 |
@@ -38,7 +35,6 @@ Common OpenZeppelin 5.x building blocks (survey/src), built with the engine's ow
 | Reason | Functions |
 |---|---|
 | keccak256 over a computed or unaligned memory range | 3 |
-| arithmetic on a hashed storage slot | 3 |
 | builtin delegatecall | 1 |
 | builtin create | 1 |
 | builtin create2 | 1 |
