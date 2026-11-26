@@ -46,6 +46,13 @@ CONST_OPS = {
 CONST_UNARY = {"iszero": lambda a: int(a == 0), "not": lambda a: U256 ^ a}
 
 
+# Every storage slot hash an engine computed (mapping slots, array bases): adding an unknown offset to one of
+# these is an array element access (keccak(p) + i), resolved over ARRAY_SPAN offsets like mapping keys over the
+# key universe; a path that reaches past them is left out and reported, never guessed.
+HASHES = set()
+ARRAY_SPAN = 16  # slots an array element offset may reach (e.g. 4 elements of a 4-slot struct; reported)
+
+
 def keccak_int(data: bytes) -> int:
     from Crypto.Hash import keccak
     h = keccak.new(digest_bits=256)
@@ -800,9 +807,21 @@ class Exec(Vals):
             if len(opts) > 1024:
                 raise Unsupported("too many mapping key combinations")
         slots = [(cond, keccak_int(b"".join(w.to_bytes(32, "big") for w in words))) for cond, words in opts]
+        HASHES.update(sl for _, sl in slots)
         if len(slots) == 1 and slots[0][0] == TRUE:
             return slots[0][1]
         return SymSlot(slots)
+
+    def _array_slots(self, bases, off):
+        """Slots base + off for an unknown offset: one option per offset 0..ARRAY_SPAN-1 (sload/sstore flag a
+        path whose offset is past them, as for mapping keys outside the universe)."""
+        opts = []
+        for cond, base in bases:
+            for j in range(ARRAY_SPAN):
+                cc = self.c.and_(cond, self.eq(off, j))
+                if cc != FALSE:
+                    opts.append((cc, (base + j) & U256))
+        return SymSlot(opts)
 
     def note_outside(self, sym):
         covered = self.c.any_([cond for cond, _ in sym.options])
@@ -999,7 +1018,14 @@ class Exec(Vals):
             other = [x for x in a if not isinstance(x, SymSlot)]
             if len(sym) == 1 and isinstance(other[0], int):
                 return sym[0].shifted(other[0])
+            if len(sym) == 1 and not isinstance(other[0], Selector):
+                return self._array_slots(sym[0].options, other[0])  # an element of an array under a mapping
             raise Unsupported("arithmetic on a hashed storage slot")
+        if name == "add" and len(a) == 2 and any(isinstance(x, int) and x in HASHES for x in a) \
+                and any(not isinstance(x, (int, SymSlot, Selector)) for x in a):
+            h = next(x for x in a if isinstance(x, int) and x in HASHES)
+            other = next(x for x in a if x is not h)
+            return self._array_slots([(TRUE, h)], other)  # keccak(p) + i: an element of a dynamic array
         if name == "keccak256":
             return self.keccak(a)
         if name in ("add", "sub", "mul", "div", "mod"):

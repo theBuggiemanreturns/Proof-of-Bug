@@ -40,6 +40,37 @@ class Contract:
             raise KeyError(f"{var} has no field {name}" if members else f"{var} is not a struct")
         return int(m["slot"]), int(m["offset"]), int(self.types[m["type"]]["numberOfBytes"])
 
+    def type_slots(self, t, base, keys, span, depth=0):
+        """Every slot a value of storage type t at `base` can occupy, walking the compiler's type tree: a struct's
+        members at their offsets, a fixed array's slots, a mapping's entry for every key, a dynamic array's (or
+        long bytes') length slot and its first `span` data slots at keccak(base). Any nesting."""
+        from .symexec import mapping_slot, keccak_int
+        info = self.types.get(t, {})
+        enc = info.get("encoding", "inplace")
+        if depth > 6:
+            return {base}
+        if enc == "mapping":
+            out = set()
+            for k in keys:
+                out |= self.type_slots(info["value"], mapping_slot(k, base), keys, span, depth + 1)
+            return out
+        if enc in ("dynamic_array", "bytes"):
+            data = keccak_int(base.to_bytes(32, "big"))
+            out = {base} | {(data + j) % (1 << 256) for j in range(span)}
+            elem = info.get("base")
+            if enc == "dynamic_array" and elem and self.types.get(elem, {}).get("encoding", "inplace") != "inplace":
+                esize = max(1, int(self.types[elem].get("numberOfBytes", 32)) // 32)
+                for j in range(0, span, esize):  # elements that are themselves arrays/bytes
+                    out |= self.type_slots(elem, (data + j) % (1 << 256), keys, span, depth + 1)
+            return out
+        if info.get("members"):
+            out = set()
+            for mem in info["members"]:
+                out |= self.type_slots(mem["type"], base + int(mem["slot"]), keys, span, depth + 1)
+            return out
+        n = max(1, int(info.get("numberOfBytes", 32)) // 32)
+        return {base + j for j in range(n)}
+
     def value_slots(self, var):
         """How many slots one entry of var occupies (a struct can take several)."""
         t = self.storage_types[var]

@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 import json
 import z3
 
-from .symexec import CHAIN_ID, copy_words, CONST_OPS, CONST_UNARY, keccak_int, mapping_slot, PANIC_SELECTOR, Unsupported, SymSlot, Selector, ETH_SLOT
+from .symexec import HASHES, ARRAY_SPAN, CHAIN_ID, copy_words, CONST_OPS, CONST_UNARY, keccak_int, mapping_slot, PANIC_SELECTOR, Unsupported, SymSlot, Selector, ETH_SLOT
 
 M = 1 << 256
 HALF = 1 << 255
@@ -752,9 +752,21 @@ class ZExec:
                         new.append((z.and_(cond, z.eq(v, kk)), words + [kk]))
             opts = new
         slots = [(cond, keccak_int(b"".join(w.to_bytes(32, "big") for w in words))) for cond, words in opts]
+        HASHES.update(sl for _, sl in slots)
         if len(slots) == 1 and slots[0][0] is True:
             return slots[0][1]
         return SymSlot(slots)
+
+    def _array_slots(self, bases, off):
+        """As symexec: base + off over offsets 0..ARRAY_SPAN-1; a path past them is assumed away
+        (note_outside), the array bound being a reported limit like the key universe."""
+        z, opts = self.z, []
+        for cond, base in bases:
+            for j in range(ARRAY_SPAN):
+                cc = z.and_(cond, z.eq(off, j))
+                if not z.is_false(cc):
+                    opts.append((cc, (base + j) % M))
+        return SymSlot(opts)
 
     def note_outside(self, sym):
         z = self.z
@@ -908,7 +920,14 @@ class ZExec:
             sym = [x for x in a if isinstance(x, SymSlot)]
             other = [x for x in a if not isinstance(x, SymSlot)]
             if len(sym) == 1 and is_c(other[0]): return sym[0].shifted(other[0])
+            if len(sym) == 1 and not isinstance(other[0], Selector):
+                return self._array_slots(sym[0].options, other[0])  # an element of an array under a mapping
             raise Unsupported("arithmetic on a hashed storage slot")
+        if name == "add" and len(a) == 2 and any(is_c(x) and x in HASHES for x in a) \
+                and any(not is_c(x) and not isinstance(x, (SymSlot, Selector)) for x in a):
+            h = next(x for x in a if is_c(x) and x in HASHES)
+            other = next(x for x in a if x is not h)
+            return self._array_slots([(True, h)], other)  # keccak(p) + i: an element of a dynamic array
         if name == "keccak256": return self.keccak(a)
         for x in a:
             if isinstance(x, (SymSlot, Selector)) and name not in ("sload", "sstore", "mstore"):

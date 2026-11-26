@@ -317,18 +317,13 @@ class Model:
     def candidate_slots(self):
         """Every storage slot the model can touch: plain variables plus mapping entries for
         each key in the key universe (one or two levels deep), as (address, slot)."""
+        from .symexec import ARRAY_SPAN
         out = set()
         for con, a in self.contracts:
             for var, base in con.storage.items():
-                d = con.mapping_depth(var)
-                n = con.value_slots(var)  # every slot of the value: structs and fixed-size arrays span several
-                if d == 0:
-                    out |= {(a, base + j) for j in range(n)}
-                elif d == 1:
-                    out |= {(a, mapping_slot(k, base) + j) for k in self.key_universe for j in range(n)}
-                else:
-                    out |= {(a, mapping_slot(k2, mapping_slot(k1, base)) + j)
-                            for k1 in self.key_universe for k2 in self.key_universe for j in range(n)}
+                # every slot the value can occupy, at any nesting: structs, mappings (every key in the universe),
+                # dynamic arrays and long bytes (length + the first ARRAY_SPAN data slots), see Contract.type_slots
+                out |= {(a, s) for s in con.type_slots(con.storage_types[var], base, self.key_universe, ARRAY_SPAN)}
         return sorted(out)
 
     # ---------- rules and search ----------
