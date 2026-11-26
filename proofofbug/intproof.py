@@ -82,6 +82,46 @@ def zi(v):
     return z3.IntVal(v) if is_c(v) else v
 
 
+OPTIONS_MAX = 32
+
+
+def z_options(v, depth=0):
+    """[(condition, constant)] when a term can only be one of a few constants (if-then-else trees with
+    number leaves, and +, -, *, % of such terms): the Z3 form of symexec.Choice. None otherwise."""
+    if is_c(v):
+        return [(True, v)]
+    if not isinstance(v, z3.ExprRef) or depth > 12:
+        return None
+    if z3.is_int_value(v):
+        return [(True, v.as_long())]
+    if z3.is_app_of(v, z3.Z3_OP_ITE):
+        c, a, b = v.children()
+        oa, ob = z_options(a, depth + 1), z_options(b, depth + 1)
+        if oa is None or ob is None:
+            return None
+        out = [(z3.And(c, ca) if ca is not True else c, x) for ca, x in oa] + \
+              [(z3.And(z3.Not(c), cb) if cb is not True else z3.Not(c), x) for cb, x in ob]
+        return out if len(out) <= OPTIONS_MAX else None
+    ops = {z3.Z3_OP_ADD: lambda x, y: x + y, z3.Z3_OP_SUB: lambda x, y: x - y,
+           z3.Z3_OP_MUL: lambda x, y: x * y, z3.Z3_OP_MOD: lambda x, y: x % y if y else 0}
+    for op, f in ops.items():
+        if z3.is_app_of(v, op) and len(v.children()) >= 2:
+            acc = z_options(v.children()[0], depth + 1)
+            for ch in v.children()[1:]:
+                o2 = z_options(ch, depth + 1)
+                if acc is None or o2 is None:
+                    return None
+                acc = [(c1 if c2 is True else (c2 if c1 is True else z3.And(c1, c2)), f(x1, x2))
+                       for c1, x1 in acc for c2, x2 in o2]
+                acc = [(c, x) for c, x in acc if c is True or not z3.is_false(z3.simplify(c))]
+                if len(acc) > OPTIONS_MAX:
+                    return None
+            if any(x < 0 or x >= M for _, x in acc):  # the term relies on wrapping it does not show: no guess
+                return None
+            return acc
+    return None
+
+
 def _isbool(x):
     return isinstance(x, bool) or (isinstance(x, z3.ExprRef) and z3.is_bool(x))
 
@@ -427,6 +467,7 @@ class ZExec:
         self.ret_words, self.ret_size, self.ret_sizes = [], 0, set()
         self.panics = {}
         self.rd_words, self.rd_size = [], 0
+        self.opt = True  # while a builtin runs once per option of a computed address/size: that option's condition
 
     @property
     def storage(self):
@@ -435,7 +476,8 @@ class ZExec:
     @property
     def local_active(self):
         z = self.z
-        return z.not_(z.or_(z.or_(z.or_(self.halted, self.leave), z.or_(self.brk, self.cont)), self.outer_dead))
+        return z.and_(self.opt, z.not_(z.or_(z.or_(z.or_(self.halted, self.leave), z.or_(self.brk, self.cont)),
+                                             self.outer_dead)))
 
     @property
     def active(self):
@@ -446,7 +488,7 @@ class ZExec:
         z = self.z
         # not outer_dead: where the caller has already left, it never reads this frame's local values,
         # so local writes need no guard there (reverts and storage writes do: see local_active)
-        return z.not_(z.or_(self.leave, z.or_(self.brk, self.cont)))
+        return z.and_(self.opt, z.not_(z.or_(self.leave, z.or_(self.brk, self.cont))))
 
     # --- branch state
     def _flags(self):
@@ -773,10 +815,93 @@ class ZExec:
         self.leave, self.brk, self.cont, self.outer_dead = saved
         return [fr.vars[r] for r in rets]
 
+    PLACES = {"mload": (0,), "mstore": (0,), "calldatacopy": (0, 1, 2), "returndatacopy": (0, 1, 2),
+              "mcopy": (0, 1, 2), "keccak256": (0, 1), "return": (0, 1), "call": (3, 4, 5, 6),
+              "staticcall": (2, 3, 4, 5), "calldataload": (0,)}
+    RANGES = {"mload": [(0, 32)], "mstore": [(0, 32)], "keccak256": [(0, "1")], "calldatacopy": [(0, "2")],
+              "returndatacopy": [(0, "2")], "mcopy": [(0, "2"), (1, "2")], "return": [(0, "1")],
+              "revert": [(0, "1")], "call": [(3, "4"), (5, "6")], "staticcall": [(2, "3"), (4, "5")]}
+    MEMORY_LIMIT = 1 << 24  # as symexec: memory this far out is an out-of-gas revert
+
+    def _per_option(self, name, a):
+        """A builtin whose address/size arguments are each one of a few constants (z_options): run it once
+        per consistent combination under that combination's condition (part of every local guard) and
+        join the results, as symexec._per_option. None if an argument is not of that form."""
+        import itertools
+        z = self.z
+        places = [i for i in self.PLACES[name] if i < len(a) and not is_c(a[i])]
+        if not places:
+            return None
+        cols = []
+        for i in places:
+            o = z_options(a[i]) if not isinstance(a[i], (SymSlot, Selector)) else None
+            if o is None or len(o) < 2:
+                return None
+            cols.append(o)
+        combos = []
+        for pick in itertools.product(*cols):
+            conds = [c for c, _ in pick if c is not True]
+            cond = z3.And(*conds) if len(conds) > 1 else (conds[0] if conds else True)
+            if cond is not True and z3.is_false(z3.simplify(cond)):
+                continue
+            args = list(a)
+            for i, (_, x) in zip(places, pick):
+                args[i] = x
+            combos.append((cond, args))
+            if len(combos) > 4 * OPTIONS_MAX:
+                return None
+        saved, rets, rds = self.opt, [], []
+        try:
+            for cond, args in combos:
+                self.opt = z.and_(saved, cond)
+                rd0 = (self.rd_words, self.rd_size)
+                rets.append((cond, self.builtin(name, args)))
+                rds.append((cond, self.rd_words, self.rd_size))
+                if name in ("call", "staticcall"):
+                    self.rd_words, self.rd_size = rd0
+        finally:
+            self.opt = saved
+        if not rets:
+            return 0
+        if name in ("call", "staticcall"):
+            _, words, size = rds[-1]
+            for cond, w_, s_ in rds[-2::-1]:
+                words = self._merge_list(cond, w_, words)
+                size = z.ite(cond, s_, size)
+            self.rd_words, self.rd_size = words, size
+        if name == "keccak256":
+            opts = []
+            for cond, r in rets:
+                if isinstance(r, SymSlot):
+                    opts += [(z.and_(cond, c2), sl) for c2, sl in r.options]
+                else:
+                    opts.append((cond, r))
+            return SymSlot([(cc, sl) for cc, sl in opts if not z.is_false(cc)])
+        acc = rets[-1][1]
+        for cond, r in rets[-2::-1]:
+            acc = z.ite(cond, r, acc)
+        return acc
+
+    def _out_of_gas(self, name, a):
+        for oi, si in self.RANGES[name]:
+            off = a[oi] if oi < len(a) else 0
+            size = a[int(si)] if isinstance(si, str) and int(si) < len(a) else si
+            if is_c(off) and is_c(size) and size > 0 and off + size > self.MEMORY_LIMIT:
+                return True
+        return False
+
     def builtin(self, name, a):
         z = self.z
         if name in CONST_OPS and all(is_c(x) for x in a): return CONST_OPS[name](*a)
         if name in CONST_UNARY and is_c(a[0]): return CONST_UNARY[name](a[0])
+        if name in self.PLACES:
+            r = self._per_option(name, a)
+            if r is not None:
+                return r
+        if name in self.RANGES and self._out_of_gas(name, a):
+            la = self.local_active  # memory this far out: out of gas, the call reverts
+            self.reverted, self.halted = z.or_(self.reverted, la), z.or_(self.halted, la)
+            return 0
         if name in ("memoryguard",): return a[0]
         if name == "pop": return 0
         if name == "add" and any(isinstance(x, SymSlot) for x in a):
@@ -991,6 +1116,14 @@ class ZExec:
         self._mstore(addr, (hi + lo) if is_c(hi) and is_c(lo) else z.add(hi, lo))
 
     def _mstore(self, addr, v):
+        if self.opt is not True:
+            # one option of a computed address: a guarded write, and no raw record another option could read
+            if isinstance(v, (SymSlot, Selector)):
+                raise Unsupported("a hashed slot stored at a computed memory address")
+            self.memraw.pop(addr, None)
+            old = self.memory.get(addr, 0)
+            self.memory[addr] = self.z.ite(self.guard(), v, 0 if isinstance(old, SymSlot) else old)
+            return
         if addr == 0x40 and not is_c(v) and not isinstance(v, SymSlot):
             # the free memory pointer only has to point past everything allocated: its proven upper
             # bound is as good as the value itself for Solidity-generated (memory-safe) code

@@ -217,7 +217,7 @@ def hunt_case(case, root, kept, invs, budget, depths, ladder, log):
                 break
             Vals.width_need = 0
             t0 = time.time()
-            if _too_big(case, root, w, d, users, unroll, rules, open_):
+            if _too_big(case, root, w, d, users, unroll, rules, open_, small=m_small):
                 rec["coverage"].append(f"bit-level search skipped at {d}tx/{w}bit: the circuit would not fit in memory")
                 log(f"  {case['id']} {d}tx/{w}bit: skipped (circuit too large for this machine)")
                 continue
@@ -347,9 +347,15 @@ def _unroll_reachable(m, budget):
     return r is not None  # a solution or a timeout: keep the honest note
 
 
-def _too_big(case, root, w, d, users, unroll, rules, open_):
-    """Estimate the circuit size from a 1-transaction build before building d transactions."""
+def _too_big(case, root, w, d, users, unroll, rules, open_, small=None):
+    """Estimate the circuit size before building d transactions at w bits. First from the 8-bit,
+    1-transaction model already built (`small`): gates grow about with the square of the width (products)
+    and linearly with depth; measured on the 11-contract STEX system this over-estimates by 1.5-2x, so it
+    only ever skips too eagerly, never runs out of memory. Within that bound, a real 1-transaction build at
+    w bits decides (a 90-bit build of a big system alone can exceed the machine's memory)."""
     from .bench import build
+    if small is not None and small.gate_count() * (w / small.W) ** 2 * d > MAX_GATES:
+        return True
     m1, _, _ = build(dict(case, rules={n: rules[n] for n in open_}), True, root, w, 1, users, unroll)
     return m1.gate_count() * d > MAX_GATES
 
