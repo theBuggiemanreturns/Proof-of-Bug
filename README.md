@@ -25,6 +25,7 @@ Solidity → Yul → NAND circuit (automatic compiler) → SAT bug search → re
 | `proofofbug/trail.py`, `proofofbug/report.py` | Audit trail of every engine claim and the EVM's answer; step-by-step reports and the AI-review prompt |
 | `proofofbug/bench.py`, `bench/level1.py`, `bench/level2.py` | Benchmark runner and cases |
 | `src/bench/Level1.sol`, `src/bench/Level2.sol` | Benchmark contracts (each with a `fixed_` switch) |
+| `survey/` | Coverage survey: common real contract code, what the engines can model and why not |
 | `viz/` | Gate viewer |
 | `poc/`-era files (`vault.v`, `gates.py`, `hunt.py`, ...) | The original hand-built proof of concept |
 
@@ -128,6 +129,43 @@ before use; `euclid-bound` is applied automatically to divisions when a proof ti
 - Mapping keys range over a key universe: the users, address 0 and the contracts.
 - A case may make one user an attacker contract: whenever it is called it can make one call back into the caller, chosen by the solver (reentrancy).
 - Width overflows, loop-unroll limits, keys outside the universe and call-depth limits mark a run "invalid" instead of producing false bugs.
+- Dynamic arguments (`bytes`, `string`, `T[]` of anything, structs with dynamic members, nested) are laid out by
+  `yul.calldata_words` with known offsets. A function with such arguments runs once per combination of argument
+  lengths (arrays 0-3 elements, bytes 0/4/32/36/68 bytes, at most 64 combinations per function, the least common
+  lengths dropped first and reported); `yul.length_variants` is the one source of those variants for every engine.
+- A value that is one of a few known constants (where branches join: a length, a pointer, a return size) stays
+  known: `symexec.Choice` in the bit-level engine, `intproof.z_options` in the Z3 engines. Memory, copy, hash,
+  call and return instructions then run once per option under its condition.
+- Memory touched past 16 MB is an out-of-gas revert, as on any chain.
+- `block.timestamp` and `block.number` are clocks that may move forward between transactions; `block.chainid` is
+  the chain every replay runs on (31337); `tx.origin` is the transaction's sender.
+- Immutables come from the deployed code, including those a contract inherits.
+- A function the engines cannot model yet is left out by name with its reason (`bench.isolate` finds it in the
+  exact model the search uses, at the deepest depth, before any rule is judged); it is a reported coverage gap,
+  never a silent one.
+
+## Coverage on real code (`survey/`)
+
+`python3 survey/survey.py --oz <openzeppelin-contracts 5.x checkout>` builds 14 contracts made of everyday
+OpenZeppelin blocks (permit and votes tokens, flash mint, ERC-1363, multicall, ERC-4626, wrapper, staking with
+SafeERC20/roles/pause, ERC-721, ERC-1155, a clone factory, a pool with a swap callback) with the engine's own
+model at 1-3 transactions, and lists every function it cannot model and why (`survey/RESULTS.md`).
+
+| | functions left out |
+|---|---|
+| before the big-contract work (`survey/RESULTS_before_fixes.md`) | 23 of 101 |
+| now | 9 of 101 |
+
+Fixed as classes, not instruction by instruction: inherited immutables, environment values, variable-size
+data, impossible far-out memory. Still open: storage arrays (vote checkpoints, `uint32[]` parameters), EIP-712
+hashing at unaligned memory offsets (and signatures need real keys anyway), `delegatecall`, `create`/`create2`.
+On an 11-contract DeFi system the bit-level engine models all but 2 of 106 functions and the exact search all but
+1. Each fix was checked against the real EVM (differential tests on the bytes-heavy survey contracts: 611
+transactions, 0 mismatches) and by the full benchmark and training-set regression.
+
+Size is the next wall for the bit-level engine: realistic balances (100 ether) need ~90-bit numbers, and an
+11-contract system at that width is tens of millions of gates. The search then skips the bit-level stage (reported
+as a coverage gap) and relies on the fuzzer, the exact 256-bit search and the prover.
 
 ## Original proof of concept
 
