@@ -95,7 +95,7 @@ def build(case, fixed, root, W, k, users, max_unroll=8):
     return m, cfg, too_big
 
 
-_ISOLATED = {}  # case tag -> {(contract, signature): why}: probes run once per case, not per build
+_ISOLATED = {}  # (case tag, k) -> {(contract, signature): why}: found once per case and depth, not per build
 
 
 def isolate(case, specs, mk, tag, k):
@@ -105,10 +105,16 @@ def isolate(case, specs, mk, tag, k):
     out with its reason (Contract.excluded) and the model is built again, until it builds. Each one left
     out is reported as a coverage gap: it is not searched, and the verdict says so.
     The exact model the search uses is the one checked, so a function that only reaches the wall after
-    other transactions (e.g. a withdrawal after a deposit) is found too. Exclusions are kept per case,
-    so every build of the case (any k, any engine) sees the same set of functions."""
+    other transactions (e.g. a withdrawal after a deposit) is found too. Exclusions are kept per case AND
+    depth: a function that can be modelled for one transaction but meets a wall only after two others stays
+    in the shallower searches (a failure at depth j also holds at every deeper depth, so a depth starts from
+    the exclusions of the depths below it)."""
     from .symexec import Unsupported
-    found = _ISOLATED.setdefault(tag, {})
+    found = _ISOLATED.setdefault((tag, k), {})
+    for (t_, j), ex in list(_ISOLATED.items()):
+        if t_ == tag and j < k:
+            for key, why in ex.items():
+                found.setdefault(key, why)
 
     def apply():
         for con, _ in specs:

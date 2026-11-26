@@ -311,7 +311,13 @@ class Vals:
                     if o is None:
                         rests.append((cond, v))  # this whole side is an ordinary value
                     else:
-                        opts += [(self.c.and_(cond, cc), x, sr) for cc, x, sr in o]
+                        # provenance: these options exist only where s is (or is not) true, so a value derived from
+                        # the other side of the same s can never be combined with them (see _combos)
+                        tag = (("s", s), 1 if side is a else 0)
+                        for cc, x, sr in o:
+                            m_ = _merge_src(sr, (tag,))
+                            if m_ is not None:  # an option from the other side of this same s cannot exist here
+                                opts.append((self.c.and_(cond, cc), x, m_))
                         r = choice_rest(v)
                         if r is not None:
                             rests.append((self.c.and_(cond, r[0]), r[1]))
@@ -934,9 +940,8 @@ class Exec(Vals):
 
     # ---------- builtins ----------
     # where a builtin needs a known number (an address, offset or size), by argument position
-    PLACES = {"mload": (0,), "mstore": (0,), "mstore8": (0,), "calldatacopy": (0, 1, 2),
-              "returndatacopy": (0, 1, 2), "mcopy": (0, 1, 2), "codecopy": (0, 1, 2), "keccak256": (0, 1),
-              "return": (0, 1), "call": (3, 4, 5, 6), "staticcall": (2, 3, 4, 5), "delegatecall": (2, 3, 4, 5),
+    PLACES = {"mload": (0,), "mstore": (0,), "mstore8": (0,), "codecopy": (0, 1, 2), "keccak256": (0, 1),
+              "return": (0, 1),
               "sload": (0,), "sstore": (0,), "tload": (0,), "tstore": (0,), "calldataload": (0,)}
 
     # memory ranges each builtin touches: (offset index, size index or a fixed size)
@@ -963,9 +968,16 @@ class Exec(Vals):
         cols = [choice_opts(a[i]) if i < len(a) and isinstance(a[i], Choice) else None for i in places]
         if not any(cols):
             return None
-        sets = [col if col else [(TRUE, a[i], ())] for i, col in zip(places, cols)]
+        # the same value in two places takes the same option in both: enumerate it once
+        pl = [i for i in places if i < len(a)]
+        uniq = []
+        for i in pl:
+            if not any(a[i] is a[j] for j in uniq):
+                uniq.append(i)
+        sets = [choice_opts(a[i]) if isinstance(a[i], Choice) else [(TRUE, a[i], ())] for i in uniq]
         out = []
-        for pick in itertools.product(*sets):
+        for upick in itertools.product(*sets):
+            pick = tuple(upick[next(k for k, j in enumerate(uniq) if a[j] is a[i])] for i in pl)
             src = ()
             for _, _, sr in pick:
                 src = _merge_src(src, sr)
@@ -979,7 +991,7 @@ class Exec(Vals):
             if cond == FALSE:
                 continue
             args = list(a)
-            for i, (_, x, _) in zip(places, pick):
+            for i, (_, x, _) in zip(pl, pick):
                 args[i] = x
             out.append((cond, args, src))
             if len(out) > 4 * CHOICE_MAX:
@@ -992,13 +1004,13 @@ class Exec(Vals):
         saved = self.opt
         self.enum_depth += 1
         try:
-            for cond, args, _ in combos:
+            for cond, args, src_ in combos:
                 # the option's condition joins every guard: memory writes, returns, halts, storage, calls
                 self.opt = self.c.and_(saved, cond)
                 if self.opt == FALSE:
                     continue
                 rd0 = (self.rd_words, self.rd_size)
-                rets.append((cond, self.builtin(name, args)))
+                rets.append((cond, self.builtin(name, args), src_))
                 rds.append((cond, self.rd_words, self.rd_size))
                 if name in ("call", "staticcall", "delegatecall"):
                     self.rd_words, self.rd_size = rd0  # each option starts from the same return data
@@ -1015,16 +1027,42 @@ class Exec(Vals):
                          for i in range(n)]
                 size = self.mux(cond, s_, size)
             self.rd_words, self.rd_size = words, size
+        if name in ("mload", "sload", "calldataload"):
+            # a value read once per option keeps that option's provenance (where it came from), so values read at
+            # correlated addresses combine consistently later
+            opts, rest = [], []
+            for cond, r, src in rets:
+                o = choice_opts(r)
+                if o is None:
+                    rest.append((cond, r))
+                    continue
+                for cc, x, sr in o:
+                    m_ = _merge_src(src, sr)
+                    if m_ is not None:
+                        opts.append((self.c.and_(cond, cc), x, m_))
+                rr = choice_rest(r)
+                if rr is not None:
+                    rest.append((self.c.and_(cond, rr[0]), rr[1]))
+            if opts:
+                rv = None
+                if rest:
+                    rv = rest[-1][1]
+                    for cc, v in rest[-2::-1]:
+                        rv = self._plain_mux(cc, v, rv)
+                    rv = (self.c.any_([cc for cc, _ in rest]), rv)
+                ch = make_choice(self.c, opts, rv)
+                if ch is not None:
+                    return ch
         if name == "keccak256":  # one hashed slot per option: a SymSlot over all of them
             opts = []
-            for cond, r in rets:
+            for cond, r, _ in rets:
                 if isinstance(r, SymSlot):
                     opts += [(self.c.and_(cond, c2), sl) for c2, sl in r.options]
                 else:
                     opts.append((cond, r))
             return SymSlot([(cc, sl) for cc, sl in opts if cc != FALSE])
         acc = rets[-1][1]
-        for cond, r in rets[-2::-1]:
+        for cond, r, _ in rets[-2::-1]:
             acc = self.mux(cond, r, acc, keep=True)
         return acc
 
@@ -1048,6 +1086,21 @@ class Exec(Vals):
                 ch = make_choice(c, [(cond, f(*args), src) for cond, args, src in combos], rest)
                 if ch is not None:
                     return ch
+        if name in ("mcopy", "calldatacopy", "returndatacopy") and any(isinstance(x, Choice) for x in a[:3]):
+            return self._copy_choice(name, a)
+        if name in self.PLACES and name in self.RANGES:
+            # a size option past 16 MB is an out-of-gas revert under its condition: drop it before combining
+            a = list(a)
+            for _, si in self.RANGES[name]:
+                if isinstance(si, str) and int(si) < len(a) and isinstance(a[int(si)], Choice):
+                    ch = a[int(si)]
+                    big = [cc for cc, x, _ in ch.options if x > self.MEMORY_LIMIT]
+                    if big:
+                        la = c.and_(self.local_active, c.any_(big))
+                        self.reverted, self.halted = c.or_(self.reverted, la), c.or_(self.halted, la)
+                        keep = [(cc, x, sr) for cc, x, sr in ch.options if x <= self.MEMORY_LIMIT]
+                        nv = make_choice(c, keep, ch.rest) if keep else (ch.rest[1] if ch.rest else 0)
+                        a[int(si)] = nv if nv is not None else ch
         if name in self.PLACES:
             combos = self._combos(a, self.PLACES[name])
             if combos is not None:
@@ -1366,9 +1419,27 @@ class Exec(Vals):
         c, w = self.c, self.world
         if isinstance(to, int) and 1 <= to <= 0x11:
             raise Unsupported(f"precompile at address {to} (e.g. ecrecover) is not modelled")
-        if not all(isinstance(x, int) for x in (inp, insize, out, outsize)):
-            raise Unsupported("call with a computed memory range")
-        act = self.active
+        for x in (inp, insize, out, outsize):
+            if not isinstance(x, (int, Choice)):
+                raise Unsupported("call with a computed memory range")
+        # pointers and sizes that are one of a few known values (Choice): the input is read once per option and
+        # merged, the callee runs ONCE (dispatching on the selector's options), the output is written per option.
+        # A rest (none of the known values) is left out, as everywhere; options past 16 MB run out of gas.
+        for x in (inp, insize, out, outsize):
+            r = choice_rest(x)
+            if r is not None:
+                self.world.flag(c.and_(self.active, r[0]))
+                self.world.rest_cuts.add("call")
+        oog = FALSE
+        for po_, so_ in ((self._opts2(inp), self._opts2(insize)), (self._opts2(out), self._opts2(outsize))):
+            for cp, pv in po_:
+                for cs, sv in so_:
+                    if sv > 0 and pv + sv > self.MEMORY_LIMIT:
+                        oog = c.or_(oog, c.and_(cp, cs))
+        if oog != FALSE:
+            la = c.and_(self.local_active, oog)
+            self.reverted, self.halted = c.or_(self.reverted, la), c.or_(self.halted, la)
+        act = c.and_(self.active, c.not_(oog))
         pays = not (isinstance(value, int) and value == 0)
         if pays and static:
             raise Unsupported("staticcall with value")
@@ -1391,10 +1462,8 @@ class Exec(Vals):
             if pays:
                 eth_move(self, w, go, self.address, t, value)
             if t in w.codes:
-                args = [self.memraw.get(inp + 4 + 32 * i, self.memory.get(inp + 4 + 32 * i, 0))
-                        for i in range(max(0, (insize - 4) // 32))]
-                sel = self.memraw.get(inp, self.memory.get(inp, 0))
-                onehot = {(sel >> 224): TRUE} if isinstance(sel, int) else None
+                args, sel = self._call_input(inp, insize)
+                onehot = self._sel_onehot(sel)
                 env = TxEnv(onehot, args, self.address, calldatasize=insize, selector_word=sel,
                             timestamp=self.env.timestamp, callvalue=value, number=self.env.number,
                             origin=self.env.origin if self.env.origin is not None else self.env.caller)
@@ -1440,7 +1509,131 @@ class Exec(Vals):
                     st[ETH_SLOT] = self.mux(hit, new, st.get(ETH_SLOT, 0))
         success = c.or_(success, c.and_(nomatch, enough))
         self.rd_words, self.rd_size = rd_words, rd_size
-        for i in range(outsize // 32):
-            if i < len(rd_words):
-                self._mstore(out + 32 * i, self.mux(success, rd_words[i], self.memory.get(out + 32 * i, 0)))
+        if isinstance(out, int) and isinstance(outsize, int):
+            for i in range(outsize // 32):
+                if i < len(rd_words):
+                    self._mstore(out + 32 * i, self.mux(success, rd_words[i], self.memory.get(out + 32 * i, 0)))
+        else:  # the output range per option, each under its own condition
+            saved = self.opt
+            self.enum_depth += 1
+            try:
+                for cond, (o_, s_), _ in (self._combos([out, outsize], (0, 1)) or []):
+                    self.opt = c.and_(saved, cond)
+                    if self.opt == FALSE or (s_ > 0 and o_ + s_ > self.MEMORY_LIMIT):
+                        continue
+                    for i in range(s_ // 32):
+                        if i < len(rd_words):
+                            self._mstore(o_ + 32 * i, self.mux(success, rd_words[i], self.memory.get(o_ + 32 * i, 0),
+                                                               keep=True))
+            finally:
+                self.opt = saved
+                self.enum_depth -= 1
         return self.bit(success)
+
+    def _copy_choice(self, name, a):
+        """mcopy / calldatacopy / returndatacopy whose destination, source or size is one of a few known values:
+        source word i is read once (merged over the source options), then written at each destination option
+        under "this destination, and the size reaches word i" (a size ending inside the word writes its first
+        bytes only). The cost is destinations x words, never destinations x sources x sizes. Exact; rest paths are
+        left out (counted); a range past 16 MB is an out-of-gas revert."""
+        c = self.c
+        dst, src, size = a[:3]
+        for x in (dst, src, size):
+            r = choice_rest(x)
+            if r is not None:
+                self.world.flag(c.and_(self.active, r[0]))
+                self.world.rest_cuts.add(name)
+        dopts, sopts, zopts = self._opts2(dst), self._opts2(src), self._opts2(size)
+        oog = FALSE
+        for cd, d in dopts:
+            for cz, z_ in zopts:
+                if z_ > 0 and d + z_ > self.MEMORY_LIMIT:
+                    oog = c.or_(oog, c.and_(cd, cz))
+        zopts = [(cz, z_) for cz, z_ in zopts if z_ <= self.MEMORY_LIMIT]
+        if oog != FALSE:
+            la = c.and_(self.local_active, oog)
+            self.reverted, self.halted = c.or_(self.reverted, la), c.or_(self.halted, la)
+        if not zopts:
+            return 0
+        n = (max(z_ for _, z_ in zopts) + 31) // 32
+
+        def source(i):  # word i of the source, merged over the source options
+            acc = None
+            for cs, s in sopts[::-1]:
+                if name == "mcopy":
+                    v = self.memraw.get(s + 32 * i, self.memory.get(s + 32 * i, 0))
+                elif name == "calldatacopy":
+                    if s < 4 or (s - 4) % 32:
+                        raise Unsupported("calldatacopy at an unaligned offset")
+                    cd_ = self.calldata_words()
+                    k = (s - 4) // 32 + i
+                    v = cd_[k] if k < len(cd_) else 0
+                else:
+                    if s % 32:
+                        raise Unsupported("returndatacopy at an unaligned offset")
+                    k = s // 32 + i
+                    v = self.rd_words[k] if k < len(self.rd_words) else 0
+                acc = v if acc is None else self.mux(cs, v, acc, keep=True)
+            return 0 if acc is None else acc
+
+        words = [source(i) for i in range(n)]
+        saved = self.opt
+        self.enum_depth += 1
+        try:
+            for cd, d in dopts:
+                for i in range(n):
+                    full = c.any_([cz for cz, z_ in zopts if z_ >= 32 * (i + 1) and not (z_ > 0 and d + z_ > self.MEMORY_LIMIT)])
+                    if full != FALSE:
+                        self.opt = c.and_(saved, c.and_(cd, full))
+                        if self.opt != FALSE:
+                            self._mstore(d + 32 * i, words[i])
+                    for cz, z_ in zopts:
+                        if 32 * i < z_ < 32 * (i + 1) and not (d + z_ > self.MEMORY_LIMIT):
+                            self.opt = c.and_(saved, c.and_(cd, cz))
+                            if self.opt != FALSE:
+                                self._partial_store(d + 32 * i, words[i], z_ - 32 * i)
+        finally:
+            self.opt = saved
+            self.enum_depth -= 1
+        return 0
+
+    def _opts2(self, v):
+        """[(condition, constant)] of a constant or a Choice (its rest is handled by the caller)."""
+        return [(TRUE, v)] if isinstance(v, int) else [(cc, x) for cc, x, _ in v.options]
+
+    def _call_input(self, inp, insize):
+        """A call's calldata words and selector word, read from memory once per option of the input pointer and
+        merged (each word keeps its known values where it has them); words past the input size are 0."""
+        sizes = [x for _, x in self._opts2(insize) if x <= self.MEMORY_LIMIT]
+        n = max([max(0, (s - 4) // 32) for s in sizes] + [0])
+        def word(addr_opts, off):
+            acc = None
+            for cond, p in addr_opts[::-1]:
+                v = self.memraw.get(p + off, self.memory.get(p + off, 0))
+                acc = v if acc is None else self.mux(cond, v, acc, keep=True)
+            return 0 if acc is None else acc
+        po = self._opts2(inp)
+        args = []
+        for i in range(n):
+            w_ = word(po, 4 + 32 * i)
+            if not isinstance(insize, int) or insize < 4 + 32 * (i + 1):
+                inside = self.ult(4 + 32 * i, insize) if not isinstance(insize, int) else FALSE
+                w_ = self.mux(inside, w_, 0, keep=True)  # past this call's own size: nothing was sent
+            args.append(w_)
+        return args, word(po, 0)
+
+    def _sel_onehot(self, sel):
+        """The callee's dispatch: one selector (a constant), several (a Choice: each under its condition; its rest
+        is left out), or None (an unknown word: the callee compares it)."""
+        if isinstance(sel, int):
+            return {(sel >> 224): TRUE}
+        if isinstance(sel, Choice):
+            oh = {}
+            for cc, x, _ in sel.options:
+                k = x >> 224
+                oh[k] = self.c.or_(oh.get(k, FALSE), cc)
+            if sel.rest is not None:
+                self.world.flag(self.c.and_(self.active, sel.rest[0]))
+                self.world.rest_cuts.add("call selector")
+            return oh
+        return None

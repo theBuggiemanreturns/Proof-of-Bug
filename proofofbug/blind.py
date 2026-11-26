@@ -163,17 +163,28 @@ def validate_names(case, root, rules):
 
 
 def settle(case, root, depths, log):
-    """Fix the set of modelled functions before any rule is judged: build the deepest model the search
-    will use, so every function the engines cannot model is found and left out now (bench.isolate),
-    not halfway through the search."""
+    """Find which functions the engines cannot model before any rule is judged (bench.isolate): at one
+    transaction (the set rules are checked against: a function modelled there is searched there) and at the
+    deepest depth the search uses (functions that meet a wall only after other transactions are left out of
+    those deeper searches only, and reported per depth). Returns {depth: {function: why}}."""
     from .bench import build, auto_bounds
     W, users, unroll = auto_bounds(dict(case, rules={}), root, 8, 3, case.get("users", 2), log=lambda *_: None)
     k = max(depths) if isinstance(depths, (list, tuple)) else max(int(d) for d in str(depths).split(","))
-    m, _, _ = build(dict(case, rules={}), True, root, W, k, users, unroll)
-    if m.excluded:
-        log(f"{case['id']}: {len(m.excluded)} functions left out of the model (cannot be modelled yet):")
-        for f, why in sorted(m.excluded.items()):
-            log(f"    {f}: {why}")
+    # which functions can be modelled does not depend on the number width: a narrow model finds the same walls
+    # (a 90-bit, 3-transaction model of an 11-contract system alone exceeds the machine's memory); a wall that only
+    # a wider build meets is still found there (bench.isolate) and reported
+    out = {}
+    for d in sorted({1, k}):
+        m, _, _ = build(dict(case, rules={}), True, root, min(W, 16), d, users, unroll)
+        out[d] = dict(m.excluded)
+    for d, ex in out.items():
+        new = {f: w for f, w in ex.items() if d == 1 or f not in out.get(1, {})}
+        if new:
+            label = "every search" if d == 1 else f"searches of {d}+ transactions"
+            log(f"{case['id']}: {len(new)} functions left out of {label} (cannot be modelled yet):")
+            for f, why in sorted(new.items()):
+                log(f"    {f}: {why}")
+    return out
 
 
 def hunt_case(case, root, kept, invs, budget, depths, ladder, log):
@@ -227,6 +238,9 @@ def hunt_case(case, root, kept, invs, budget, depths, ladder, log):
                 continue
             m, cfg, _ = build(dict(case, rules={n: rules[n] for n in open_}), True, root, w, d, users, unroll)
             log(f"  {case['id']} {d}tx/{w}bit: {len(open_)} rules, {m.gate_count()} gates, built in {time.time()-t0:.0f}s")
+            if m.excluded:  # functions this search could not include (reported with the search they are missing from)
+                rec["coverage"].append(f"bit-level search at {d}tx/{w}bit left out: " +
+                                       "; ".join(f"{f} ({why})" for f, why in sorted(m.excluded.items())))
             if first:
                 diff = differential(m, cfg, n=150)
                 rec["diff"] = {"compared": diff["compared_txs"], "mismatches": len(diff["mismatches"]),
@@ -404,7 +418,7 @@ def cmd_run(root, cases, only, budget, depths, ladder):
         rec = {"id": case["id"]}
         try:
             proposals = json.load(open(pfile))
-            settle(case, root, depths, log)
+            rec["left_out"] = {str(d): ex for d, ex in settle(case, root, depths, log).items()}
             rules, invs, rejected = materialize(proposals)
             rec["rejected"] = [list(r) for r in rejected]
             kept, rej2 = validate_names(case, root, rules)
